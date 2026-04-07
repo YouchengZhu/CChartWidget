@@ -2,31 +2,136 @@
 #define CHARTWIDGET_H
 
 #include <QWidget>
+#include <QObject>
 #include <QVector>
+#include <QList>
+#include <QStringList>
 #include <QColor>
 #include <QDateTime>
 #include <QFont>
-#include <QString>
-#include <QPointF>
-#include <QRectF>
+#include <QBrush>
 #include <QPixmap>
-#include <QMenu>
+#include <QRectF>
+#include <QPointF>
 
-class Axis : public QObject {
-    Q_OBJECT
+// ========================================================================
+// 枚举定义
+// ========================================================================
+
+enum class AxisPosition  { Bottom, Left };
+enum class AxisType      { Numeric, DateTime, Date };
+enum class NumericNotation { Decimal, Scientific };
+enum class DateTimeFormat  { HHmmss, HHmm, HHmmsszzz };
+enum class DateFormat      { yyyyMMdd, yyyy_MM_dd, MMdd, yyyyMM };
+enum class TickDirection    { Inside, Outside };
+enum class SeriesType      { Line, Bar, StackedBar };
+enum class ScatterStyle {
+    None, Circle, Square, Diamond,
+    Triangle, Cross, Plus, Star, Dot
+};
+
+// ========================================================================
+// DataPoint
+// ========================================================================
+
+struct DataPoint {
+    double x = 0, y = 0;
+    DataPoint() = default;
+    DataPoint(double xv, double yv) : x(xv), y(yv) {}
+    DataPoint(const QDateTime &t, double yv)
+        : x(static_cast<double>(t.toSecsSinceEpoch())), y(yv) {}
+};
+
+// ========================================================================
+// ChartTheme
+// ========================================================================
+
+struct ChartTheme {
+    QColor background       = QColor(252, 252, 252);
+    QColor plotBackground   = QColor(255, 255, 255);
+    QColor textColor        = QColor(60, 60, 60);
+    QColor titleColor       = QColor(40, 40, 40);
+    QColor axisTitleColor   = QColor(50, 50, 50);
+    QColor tickColor        = QColor(120, 120, 120);
+    QColor subTickColor     = QColor(200, 200, 200);
+    QColor gridColor        = QColor(210, 210, 210);
+    Qt::PenStyle gridStyle  = Qt::DashLine;
+    int     gridWidth       = 1;
+
+    QFont titleFont         = QFont("Microsoft YaHei", 13, QFont::Bold);
+    QFont labelFont         = QFont("Microsoft YaHei", 9);
+    QFont axisTitleFont     = QFont("Microsoft YaHei", 10, QFont::Bold);
+    QFont legendFont        = QFont("Microsoft YaHei", 9);
+    QFont tooltipFont       = QFont("Microsoft YaHei", 9);
+
+    QList<QColor> seriesColors = {
+        QColor(255, 77, 79),  QColor(54, 162, 235), QColor(255, 206, 86),
+        QColor(75, 192, 192), QColor(153, 102, 255), QColor(255, 159, 64),
+        QColor(46, 204, 113), QColor(231, 76, 60),  QColor(52, 152, 219),
+        QColor(241, 196, 15), QColor(26, 188, 156),  QColor(155, 89, 182),
+    };
+
+    QColor legendBorder       = QColor(180, 180, 180);
+    QColor legendBackground   = QColor(255, 255, 255, 235);
+    int    legendRadius       = 4;
+
+    QColor tooltipBorder      = QColor(160, 160, 160);
+    QColor tooltipBackground  = QColor(255, 255, 255, 245);
+    QColor tooltipShadow      = QColor(0, 0, 0, 40);
+    int    tooltipRadius      = 6;
+
+    static ChartTheme light() { return ChartTheme{}; }
+
+    static ChartTheme dark() {
+        ChartTheme t;
+        t.background        = QColor(30, 30, 30);
+        t.plotBackground    = QColor(40, 40, 40);
+        t.textColor         = QColor(200, 200, 200);
+        t.titleColor        = QColor(230, 230, 230);
+        t.axisTitleColor    = QColor(210, 210, 210);
+        t.tickColor         = QColor(140, 140, 140);
+        t.subTickColor      = QColor(80, 80, 80);
+        t.gridColor         = QColor(70, 70, 70);
+        t.legendBorder      = QColor(80, 80, 80);
+        t.legendBackground  = QColor(50, 50, 50, 220);
+        t.tooltipBorder     = QColor(90, 90, 90);
+        t.tooltipBackground = QColor(55, 55, 55, 240);
+        t.tooltipShadow     = QColor(0, 0, 0, 80);
+        return t;
+    }
+
+    static ChartTheme scientific() {
+        ChartTheme t;
+        t.background      = QColor(245, 245, 240);
+        t.gridColor       = QColor(200, 200, 200);
+        t.gridStyle       = Qt::SolidLine;
+        t.seriesColors = {
+            QColor(0,0,0), QColor(200,50,50), QColor(50,100,200),
+            QColor(0,150,100), QColor(180,100,30), QColor(120,50,150),
+        };
+        return t;
+    }
+};
+
+// ========================================================================
+// Axis：纯数据容器
+// ========================================================================
+
+class Axis {
 public:
-    enum Position { Bottom, Left };
-    enum SubTickDirection { SubTickInside, SubTickOutside };
+    explicit Axis(AxisPosition pos);
+    ~Axis();
 
-    explicit Axis(Position pos, QObject *parent = nullptr);
-    virtual ~Axis();
+    AxisPosition position() const;
+    AxisType     type() const;
+    void setType(AxisType t);
 
-    Position position() const;
     void setRange(double min, double max);
     void setAutoRange(bool on);
     bool isAutoRange() const;
     double min() const;
     double max() const;
+
     void setTitle(const QString &t);
     QString title() const;
     void setLabelFont(const QFont &f);
@@ -40,6 +145,8 @@ public:
     bool isTicksVisible() const;
     void setTickColor(const QColor &c);
     QColor tickColor() const;
+    void setTickDirection(TickDirection d);
+    TickDirection tickDirection() const;
 
     void setSubTickCount(int n);
     int  subTickCount() const;
@@ -47,8 +154,8 @@ public:
     bool isSubTicksVisible() const;
     void setSubTickColor(const QColor &c);
     QColor subTickColor() const;
-    void setSubTickDirection(SubTickDirection dir);
-    SubTickDirection subTickDirection() const;
+    void setSubTickDirection(TickDirection d);
+    TickDirection subTickDirection() const;
 
     void setGridVisible(bool on);
     bool isGridVisible() const;
@@ -59,125 +166,76 @@ public:
     void setGridColor(const QColor &c);
     QColor gridColor() const;
 
-    virtual QString formatValue(double v) const = 0;
-    virtual QVector<double> computeTicks() const = 0;
-
-protected:
-    Position m_position;
-    bool     m_autoRange  = true;
-    double   m_min = 0.0, m_max = 100.0;
-    QString  m_title;
-    QFont    m_labelFont, m_titleFont;
-    int      m_tickCount    = 6;
-    bool     m_ticksVisible = true;
-    QColor   m_tickColor;
-    int      m_subTickCount    = 4;
-    bool     m_subTicksVisible = true;
-    QColor   m_subTickColor;
-    SubTickDirection m_subTickDirection = SubTickInside;
-    bool     m_gridVisible          = true;
-    bool     m_horizontalGridVisible = true;
-    bool     m_verticalGridVisible   = true;
-    QColor   m_gridColor;
-
-    static double niceStep(double range, int tickCount);
-    static int decimalsForStep(double step);
-};
-
-class NumericAxis : public Axis {
-    Q_OBJECT
-public:
-    enum Notation { Decimal, Scientific };
-    explicit NumericAxis(Position pos, QObject *parent = nullptr);
-    void setNotation(Notation n);
-    Notation notation() const;
+    void setNotation(NumericNotation n);
+    NumericNotation notation() const;
     void setFormatPrecision(int p);
     int  formatPrecision() const;
-    QString formatValue(double v) const override;
-    QVector<double> computeTicks() const override;
+
+    void setDateTimeFormat(DateTimeFormat f);
+    DateTimeFormat dateTimeFormat() const;
+    void setDateFormat(DateFormat f);
+    DateFormat dateFormat() const;
+
 private:
-    Notation m_notation = Decimal;
-    int      m_precision = -1;
+    AxisPosition  m_position;
+    AxisType      m_type = AxisType::Numeric;
+    bool   m_autoRange = true;
+    double m_min = 0.0, m_max = 100.0;
+    QString m_title;
+    QFont  m_labelFont, m_titleFont;
+
+    int  m_tickCount = 6;
+    bool m_ticksVisible = true;
+    QColor        m_tickColor;
+    TickDirection m_tickDirection = TickDirection::Outside;
+
+    int  m_subTickCount = 4;
+    bool m_subTicksVisible = true;
+    QColor        m_subTickColor;
+    TickDirection m_subTickDirection = TickDirection::Inside;
+
+    bool   m_gridVisible = true;
+    bool   m_horizontalGridVisible = true;
+    bool   m_verticalGridVisible = true;
+    QColor m_gridColor;
+
+    NumericNotation m_notation = NumericNotation::Decimal;
+    int m_precision = -1;
+
+    DateTimeFormat m_dateTimeFmt = DateTimeFormat::HHmmss;
+    DateFormat     m_dateFmt     = DateFormat::yyyyMMdd;
 };
 
-class DateTimeAxis : public Axis {
-    Q_OBJECT
-public:
-    enum Format { HHmmss, HHmm, HHmmsszzz };
-    explicit DateTimeAxis(Position pos, QObject *parent = nullptr);
-    void setFormat(Format f);
-    Format format() const;
-    void setRange(const QDateTime &lo, const QDateTime &hi);
-    QDateTime minDateTime() const;
-    QDateTime maxDateTime() const;
-    QString formatValue(double v) const override;
-    QVector<double> computeTicks() const override;
-private:
-    Format m_fmt = HHmmss;
-    double dt2d(const QDateTime &dt) const;
-    QDateTime d2dt(double v) const;
-};
+// ========================================================================
+// Series
+// ========================================================================
 
-class DateAxis : public Axis {
-    Q_OBJECT
+class Series {
 public:
-    enum Format { yyyyMMdd, yyyy_MM_dd, MMdd, yyyyMM };
-    explicit DateAxis(Position pos, QObject *parent = nullptr);
-    void setFormat(Format f);
-    Format format() const;
-    void setRange(const QDateTime &lo, const QDateTime &hi);
-    QDateTime minDateTime() const;
-    QDateTime maxDateTime() const;
-    QString formatValue(double v) const override;
-    QVector<double> computeTicks() const override;
-private:
-    Format m_fmt = yyyyMMdd;
-    double dt2d(const QDateTime &dt) const;
-    QDateTime d2dt(double v) const;
-};
-
-class Series : public QObject {
-    Q_OBJECT
-public:
-    enum Type { Line, Bar, StackedBar };
-    explicit Series(const QString &name, Type type, QObject *parent = nullptr);
+    explicit Series(const QString &name, SeriesType type);
     virtual ~Series();
-    QString name() const;
-    Type    type() const;
+    QString    name() const;
+    SeriesType type() const;
     void setVisible(bool on);
     bool isVisible() const;
     void setColor(const QColor &c);
     QColor color() const;
     virtual int dataCount() const = 0;
 protected:
-    QString m_name;
-    Type    m_type;
-    bool    m_visible = true;
-    QColor  m_color;
-};
-
-struct DataPoint {
-    double x, y;
-    DataPoint() : x(0), y(0) {}
-    DataPoint(double xv, double yv) : x(xv), y(yv) {}
-    DataPoint(const QDateTime &t, double yv)
-        : x(static_cast<double>(t.toSecsSinceEpoch())), y(yv) {}
-};
-
-enum ScatterStyle {
-    ScatterNone, ScatterCircle, ScatterSquare, ScatterDiamond,
-    ScatterTriangle, ScatterCross, ScatterPlus, ScatterStar, ScatterDot
+    QString    m_name;
+    SeriesType m_type;
+    bool       m_visible = true;
+    QColor     m_color;
 };
 
 class LineSeries : public Series {
-    Q_OBJECT
 public:
-    explicit LineSeries(const QString &name, QObject *parent = nullptr);
+    explicit LineSeries(const QString &name);
     void append(double x, double y);
-    void append(const QDateTime &timeX, double y);
+    void append(const QDateTime &tx, double y);
     void append(const DataPoint &p);
     void append(const QVector<DataPoint> &pts);
-    void removeAt(int index);
+    void removeAt(int i);
     void clear();
     const QVector<DataPoint>& data() const;
     int dataCount() const override;
@@ -185,42 +243,47 @@ public:
     double lineWidth() const;
     void setMarkerSize(double s);
     double markerSize() const;
-    void setScatterStyle(ScatterStyle style);
+    void setScatterStyle(ScatterStyle s);
     ScatterStyle scatterStyle() const;
+    void setFillBrush(const QBrush &b);
+    QBrush fillBrush() const;
+    void setFillEnabled(bool on);
+    bool isFillEnabled() const;
 private:
     QVector<DataPoint> m_data;
-    double m_lineWidth = 2.0, m_markerSize = 5.0;
-    ScatterStyle m_scatterStyle = ScatterCircle;
+    double       m_lineWidth    = 2.0;
+    double       m_markerSize   = 5.0;
+    ScatterStyle m_scatterStyle = ScatterStyle::Circle;
+    QBrush       m_fillBrush;
+    bool         m_fillEnabled  = false;
 };
 
 class BarSeries : public Series {
-    Q_OBJECT
 public:
-    explicit BarSeries(const QString &name, QObject *parent = nullptr);
+    struct XY { double x, y; };
+    explicit BarSeries(const QString &name);
     void append(double value);
-    void removeAt(int index);
+    void appendXY(double x, double y);
+    void removeAt(int i);
     void clear();
     const QVector<double>& data() const;
-    int dataCount() const override;
-    void appendXY(double x, double y);
-    struct XY { double x, y; };
     const QVector<XY>& xyData() const;
     bool useXY() const;
+    int dataCount() const override;
     void setBarWidthRatio(double r);
     double barWidthRatio() const;
 private:
     QVector<double> m_data;
     QVector<XY>     m_xyData;
-    bool            m_useXY = false;
-    double          m_barWidthRatio = 0.7;
+    bool   m_useXY = false;
+    double m_barWidthRatio = 0.7;
 };
 
 class StackedBarSeries : public Series {
-    Q_OBJECT
 public:
-    explicit StackedBarSeries(const QString &name, QObject *parent = nullptr);
+    explicit StackedBarSeries(const QString &name);
     void append(double value);
-    void removeAt(int index);
+    void removeAt(int i);
     void clear();
     const QVector<double>& data() const;
     int dataCount() const override;
@@ -231,21 +294,21 @@ private:
     double m_barWidthRatio = 0.7;
 };
 
-class ChartWidget : public QWidget {
+// ========================================================================
+// ChartModel：数据管理 + 信号
+// ========================================================================
+
+class ChartModel : public QObject {
     Q_OBJECT
 public:
-    enum RescaleMode { AutoFit, FitVisible, Manual };
-    enum LegendPosition { LegendTopRight, LegendTop, LegendBottom, LegendHidden };
-    enum LegendOrientation { LegendHorizontal, LegendVertical };
-
-    explicit ChartWidget(QWidget *parent = nullptr);
-    ~ChartWidget();
+    explicit ChartModel(QObject *parent = nullptr);
+    ~ChartModel();
 
     void addAxis(Axis *axis);
     void removeAxis(Axis *axis);
     QList<Axis*> axes() const;
-    Axis* axisX() const { return m_axisX; }
-    Axis* axisY() const { return m_axisY; }
+    Axis* axisX() const;
+    Axis* axisY() const;
 
     void addSeries(Series *s);
     void removeSeries(Series *s);
@@ -256,10 +319,148 @@ public:
 
     void setTitle(const QString &t);
     QString title() const;
-    void setTitleFont(const QFont &f);
-    void setBackgroundColor(const QColor &c);
-    void setPlotBackgroundColor(const QColor &c);
-    void setMargin(int m);
+
+    void setTheme(const ChartTheme &theme);
+    ChartTheme theme() const;
+
+    QColor nextColor();
+
+signals:
+    void axisAdded(Axis *axis);
+    void axisRemoved(Axis *axis);
+    void seriesAdded(Series *s);
+    void seriesRemoved(Series *s);
+    void dataChanged();
+    void categoriesChanged();
+    void titleChanged();
+    void themeChanged();
+
+private:
+    Axis          *m_axisX = nullptr;
+    Axis          *m_axisY = nullptr;
+    QList<Series*> m_series;
+    QStringList    m_categories;
+    QString        m_title;
+    ChartTheme     m_theme;
+    int            m_colorIndex = 0;
+};
+
+// ========================================================================
+// ChartLayout：布局计算引擎
+// ========================================================================
+
+class ChartLayout : public QObject {
+    Q_OBJECT
+public:
+    explicit ChartLayout(ChartModel *model, QObject *parent = nullptr);
+
+    void recalculate(int widgetWidth, int widgetHeight);
+    void setOutsideLegendHeight(double h);
+    void invalidate();
+
+    QPointF mapToPixel(double dataX, double dataY) const;
+    double  pixelXToData(double px) const;
+    double  pixelYToData(double py) const;
+
+    double xMin() const;
+    double xMax() const;
+    double yMin() const;
+    double yMax() const;
+    QRectF plotArea() const;
+
+    QVector<double> xTicks() const;
+    QVector<double> yTicks() const;
+
+    QString formatAxisValue(Axis *axis, double value) const;
+
+    static double niceStep(double range, int tickCount);
+    static int    decimalsForStep(double step);
+
+private:
+    void computeXRange();
+    void computeYRange();
+    void computeLayout(int widgetWidth, int widgetHeight);
+    void computeTicks();
+
+    QVector<double> computeNumericTicks(Axis *axis) const;
+    QVector<double> computeDateTimeTicks(Axis *axis) const;
+    QVector<double> computeDateTicks(Axis *axis) const;
+
+    QString formatNumericValue(Axis *axis, double v) const;
+    QString formatDateTimeValue(double v, DateTimeFormat fmt) const;
+    QString formatDateValue(double v, DateFormat fmt) const;
+
+    ChartModel *m_model;
+    QRectF m_plotArea;
+    double m_xMin = 0, m_xMax = 100;
+    double m_yMin = 0, m_yMax = 100;
+    QVector<double> m_xTicks, m_yTicks;
+    int  m_margin = 12;
+    bool m_dirty  = true;
+    double m_outsideLegendHeight = 0;
+};
+
+// ========================================================================
+// ChartRenderer：纯绘制层
+// ========================================================================
+
+class ChartRenderer {
+public:
+    struct TooltipData {
+        bool    visible  = false;
+        QPointF position;
+        QString text;
+        QColor  color;
+    };
+
+    ChartRenderer(ChartModel *model, ChartLayout *layout);
+
+    void render(QPainter &p, int width, int height);
+    void drawBackground(QPainter &p, int width, int height);
+    void drawPlotBackground(QPainter &p);
+    void drawGrid(QPainter &p);
+    void drawSeries(QPainter &p);
+    void drawAxes(QPainter &p);
+    void drawTitle(QPainter &p);
+    void drawLegend(QPainter &p, const QRectF &plotArea,
+                    const QList<Series*> &visible, int pos, int ori);
+    void drawTooltip(QPainter &p, const TooltipData &tip);
+
+private:
+    void drawLine(QPainter &p, LineSeries *s);
+    void drawBar(QPainter &p, BarSeries *s);
+    void drawStackedBar(QPainter &p);
+    void drawScatter(QPainter &p, ScatterStyle style,
+                     const QPointF &center, double size, const QColor &color);
+
+    ChartModel  *m_model;
+    ChartLayout *m_layout;
+};
+
+// ========================================================================
+// ChartWidget：交互层
+// ========================================================================
+
+class ChartWidget : public QWidget {
+    Q_OBJECT
+public:
+    enum class LegendPosition    { TopRight, Top, Bottom, Hidden, OutsideTop  };
+    enum class LegendOrientation { Horizontal, Vertical };
+    enum class RescaleMode       { AutoFit, FitVisible, Manual };
+
+    explicit ChartWidget(QWidget *parent = nullptr);
+    ~ChartWidget();
+
+    ChartModel*  model()  const;
+    ChartLayout* layout() const;
+
+    void addAxis(Axis *axis);
+    void removeAxis(Axis *axis);
+    void addSeries(Series *s);
+    void removeSeries(Series *s);
+    void setCategories(const QStringList &cats);
+    void setTitle(const QString &t);
+    void setTheme(const ChartTheme &t);
 
     void setRescaleMode(RescaleMode mode);
     RescaleMode rescaleMode() const;
@@ -271,17 +472,21 @@ public:
     LegendPosition legendPosition() const;
     void setLegendOrientation(LegendOrientation ori);
     LegendOrientation legendOrientation() const;
-    void setLegendFont(const QFont &f);
 
     void setTooltipEnabled(bool on);
     bool isTooltipEnabled() const;
-    void setTooltipFont(const QFont &f);
 
     QPixmap exportToPixmap(const QSize &size = QSize()) const;
     void refresh();
 
+signals:
+    void dataPointHovered(Series *series, int index, const QPointF &dataPos);
+    void dataPointClicked(Series *series, int index, const QPointF &dataPos);
+    void rangeChanged(double xMin, double xMax, double yMin, double yMax);
+
 protected:
     void paintEvent(QPaintEvent *) override;
+    void resizeEvent(QResizeEvent *) override;
     void mouseMoveEvent(QMouseEvent *) override;
     void mousePressEvent(QMouseEvent *) override;
     void mouseReleaseEvent(QMouseEvent *) override;
@@ -291,69 +496,39 @@ protected:
     void leaveEvent(QEvent *) override;
 
 private:
-    void renderChart(QPainter &p, const QRect &targetRect);
-    void drawPlotBackground(QPainter &p);
-    void drawGrid(QPainter &p);
-    void drawSeries(QPainter &p);
-    void drawAxes(QPainter &p);
-    void drawBackground(QPainter &p);
-    void drawTitle(QPainter &p);
-    void drawLegend(QPainter &p);
-    void drawTooltip(QPainter &p);
-    void drawLine(QPainter &p, LineSeries *s);
-    void drawBar(QPainter &p, BarSeries *s);
-    void drawStackedBar(QPainter &p);
-    void drawScatter(QPainter &p, ScatterStyle style,
-                     const QPointF &center, double size, const QColor &color);
-
-    QRectF  plotRect() const;
-    QPointF mapToPixel(double dataX, double dataY) const;
-    double  xToDouble(double raw) const;
-    void computeXRange();
-    void computeYRange();
-    void syncRangeFromAxes();
-    void updateLayout();
+    void ensureComponents();
+    void markDirty();
+    void rebuildBuffer();
 
     void findNearest(QPoint mousePos);
-    void updateTooltipForBar(int catIdx, int barIdx);
-    void updateTooltipForStackedBar(int catIdx);
-    void updateTooltipForLine(LineSeries *ls, int ptIdx);
-    double pixelDist(const QPointF &a, const QPointF &b) const;
+    void buildTooltipForLine(LineSeries *ls, int ptIdx);
+    void buildTooltipForBar(int catIdx, int barIdx);
+    void buildTooltipForStackedBar(int catIdx);
+    double pointDist(const QPointF &a, const QPointF &b) const;
 
-    Axis          *m_axisX = nullptr;
-    Axis          *m_axisY = nullptr;
-    QList<Series*> m_series;
-    QStringList    m_categories;
+    ChartModel    *m_model    = nullptr;
+    ChartLayout   *m_layout   = nullptr;
+    ChartRenderer *m_renderer = nullptr;
 
-    QString m_title;
-    QFont   m_titleFont;
-    QColor  m_bgColor;
-    QColor  m_plotBgColor;
-    int     m_margin = 12;
+    QPixmap m_buffer;
+    bool    m_bufferDirty = true;
 
-    QRectF  m_plotArea;
-    double  m_xMin = 0, m_xMax = 100;
-    double  m_yMin = 0, m_yMax = 100;
-    bool    m_layoutDirty = true;
+    RescaleMode m_rescaleMode = RescaleMode::AutoFit;
 
-    RescaleMode m_rescaleMode = AutoFit;
-
-    bool    m_panning = false;
-    QPoint  m_panStart;
-    double  m_panXMin = 0, m_panXMax = 0;
-    double  m_panYMin = 0, m_panYMax = 0;
+    bool   m_panning = false;
+    QPoint m_panStart;
+    double m_panXMin = 0, m_panXMax = 0;
+    double m_panYMin = 0, m_panYMax = 0;
 
     bool    m_tooltipEnabled = true;
-    QFont   m_tooltipFont;
-    bool    m_showTooltip = false;
+    bool    m_showTooltip    = false;
     QPointF m_tooltipPos;
     QString m_tooltipText;
     QColor  m_tooltipColor;
     QPoint  m_mouseScreen;
 
-    LegendPosition    m_legendPosition    = LegendTopRight;
-    LegendOrientation m_legendOrientation = LegendHorizontal;
-    QFont             m_legendFont;
+    LegendPosition    m_legendPosition    = LegendPosition::TopRight;
+    LegendOrientation m_legendOrientation = LegendOrientation::Horizontal;
 };
 
-#endif
+#endif // CHARTWIDGET_H
