@@ -27,7 +27,8 @@ enum class TickDirection    { Inside, Outside };
 enum class SeriesType      { Line, Bar, StackedBar };
 enum class ScatterStyle {
     None, Circle, Square, Diamond,
-    Triangle, Cross, Plus, Star, Dot
+    Triangle, Cross, Plus, Star, Dot,
+        CustomPixmap  // 新增
 };
 
 // ========================================================================
@@ -251,6 +252,8 @@ public:
     QBrush fillBrush() const;
     void setFillEnabled(bool on);
     bool isFillEnabled() const;
+    void setPixmap(const QPixmap &pm){m_pixmap = pm;}     // 新增
+    QPixmap pixmap() const{ return m_pixmap; }                // 新增
 private:
     QVector<DataPoint> m_data;
     double       m_lineWidth    = 2.0;
@@ -258,6 +261,7 @@ private:
     ScatterStyle m_scatterStyle = ScatterStyle::Circle;
     QBrush       m_fillBrush;
     bool         m_fillEnabled  = false;
+        QPixmap m_pixmap;                      // 新增
 };
 
 class BarSeries : public Series {

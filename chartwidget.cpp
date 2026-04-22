@@ -686,8 +686,25 @@ void ChartRenderer::drawLine(QPainter &p, LineSeries *s)
     double ms = s->markerSize();
     if (ss != ScatterStyle::None && ms > 0) {
         p.setPen(Qt::NoPen);
-        for (const auto &pt : data)
-            drawScatter(p, ss, m_layout->mapToPixel(pt.x, pt.y), ms, s->color());
+        if (ss == ScatterStyle::CustomPixmap && !s->pixmap().isNull()) {
+            // ===== 新增：绘制自定义 pixmap =====
+            QPixmap pm = s->pixmap();
+            double scale = ms / 5.0;  // 以 markerSize=5 为原始大小
+            QPixmap scaled = pm.scaled(int(pm.width() * scale),
+                                       int(pm.height() * scale),
+                                       Qt::KeepAspectRatio,
+                                       Qt::SmoothTransformation);
+            double hw = scaled.width() / 2.0;
+            double hh = scaled.height() / 2.0;
+            for (const auto &pt : data) {
+                QPointF pos = m_layout->mapToPixel(pt.x, pt.y);
+                p.drawPixmap(int(pos.x() - hw), int(pos.y() - hh), scaled);
+            }
+        } else {
+            // 原有散点绘制
+            for (const auto &pt : data)
+                drawScatter(p, ss, m_layout->mapToPixel(pt.x, pt.y), ms, s->color());
+        }
     }
 
     p.restore();
