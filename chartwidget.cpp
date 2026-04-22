@@ -99,6 +99,18 @@ void LineSeries::append(const QDateTime &tx, double y) { m_data.append(DataPoint
 void LineSeries::append(const DataPoint &p) { m_data.append(p); }
 void LineSeries::append(const QVector<DataPoint> &pts) { m_data.append(pts); }
 void LineSeries::removeAt(int i) { if (i >= 0 && i < m_data.size()) m_data.removeAt(i); }
+
+void LineSeries::removeBefore(int count)
+{
+    int n = qMin(count, m_data.size());
+    if (n > 0) m_data.erase(m_data.begin(), m_data.begin() + n);
+}
+
+void LineSeries::keepLast(int maxCount)
+{
+    if (m_data.size() > maxCount)
+        m_data.erase(m_data.begin(), m_data.begin() + m_data.size() - maxCount);
+}
 void LineSeries::clear() { m_data.clear(); }
 const QVector<DataPoint>& LineSeries::data() const { return m_data; }
 int LineSeries::dataCount() const { return m_data.size(); }
@@ -709,20 +721,32 @@ void ChartRenderer::drawBar(QPainter &p, BarSeries *s)
             if (ss->isVisible() && ss->type() == SeriesType::Bar)
                 bars.append(static_cast<BarSeries*>(ss));
         int totalBars = bars.size(), barIdx = qMax(0, bars.indexOf(s));
-
-        double catWidth = pa.width() / double(nCat);
-        double groupW = catWidth * s->barWidthRatio();
+        double catLeftPx  = m_layout->mapToPixel(-0.5, 0).x();
+        double catRightPx = m_layout->mapToPixel(0.5, 0).x();
+        double catWidthPx = catRightPx - catLeftPx;
+        double groupW  = catWidthPx * s->barWidthRatio();
         double singleW = groupW / qMax(1, totalBars);
 
         for (int i = 0; i < vals.size(); ++i) {
-            double cx = pa.left() + (double(i)+0.5) * catWidth;
-            double barLeft = cx - groupW/2.0 + barIdx * singleW;
-            double val = vals[i];
-            QPointF top = m_layout->mapToPixel(0, val);
-            QPointF bot = m_layout->mapToPixel(0, qMax(m_layout->yMin(), 0.0));
-            double barH = bot.y() - top.y();
-            if (val < 0) { std::swap(top, bot); barH = -barH; }
-            QRectF r(barLeft, top.y(), singleW-1, barH);
+            // 用 mapToPixel 计算分类中心的像素 X 坐标
+            QPointF centerPt = m_layout->mapToPixel(double(i), 0);
+            double cx = centerPt.x();
+
+            // 超出绘图区域则跳过
+            if (cx < pa.left() - groupW || cx > pa.right() + groupW) continue;
+
+            double barLeft = cx - groupW / 2.0 + barIdx * singleW;
+
+            // 用 mapToPixel 计算柱顶和柱底的像素 Y 坐标
+            double yClamped = qBound(m_layout->yMin(), vals[i], m_layout->yMax());
+            QPointF topPt = m_layout->mapToPixel(0, vals[i]);
+            QPointF botPt = m_layout->mapToPixel(0, qMax(m_layout->yMin(), 0.0));
+
+            double barTop = qMin(topPt.y(), botPt.y());
+            double barH   = qAbs(botPt.y() - topPt.y());
+            if (barH < 1.0) barH = 1.0;
+
+            QRectF r(barLeft, barTop, singleW - 1, barH);
             p.fillRect(r, s->color());
             p.setPen(s->color().darker(120));
             p.drawRect(r);
@@ -744,21 +768,30 @@ void ChartRenderer::drawStackedBar(QPainter &p)
     if (nCat == 0) return;
 
     QRectF pa = m_layout->plotArea();
-    double catWidth = pa.width() / double(nCat);
-    double barW = catWidth * stacked.first()->barWidthRatio();
+    double catLeftPx  = m_layout->mapToPixel(-0.5, 0).x();
+    double catRightPx = m_layout->mapToPixel(0.5, 0).x();
+    double catWidthPx = catRightPx - catLeftPx;
+    double barW = catWidthPx * stacked.first()->barWidthRatio();
 
     p.save();
     p.setClipRect(pa.adjusted(-1,-1,1,1));
 
     for (int i = 0; i < nCat; ++i) {
-        double cx = pa.left() + (double(i)+0.5) * catWidth;
-        double barLeft = cx - barW/2.0;
+        // 用 mapToPixel 计算分类中心的像素 X 坐标
+        QPointF centerPt = m_layout->mapToPixel(double(i), 0);
+        double cx = centerPt.x();
+
+        // 超出绘图区域则跳过
+        if (cx < pa.left() - barW || cx > pa.right() + barW) continue;
+
+        double barLeft = cx - barW / 2.0;
         double cumNeg = 0, cumPos = 0;
         for (auto *sb : stacked) {
             double val = (i < sb->dataCount()) ? sb->data().at(i) : 0;
             double bv, tv;
             if (val >= 0) { bv = cumPos; tv = cumPos+val; cumPos = tv; }
             else          { bv = cumNeg+val; tv = cumNeg; cumNeg = bv; }
+            // 用 mapToPixel 计算像素 Y 坐标
             QPointF tp = m_layout->mapToPixel(0, tv);
             QPointF bp = m_layout->mapToPixel(0, bv);
             QRectF r(barLeft, tp.y(), barW, bp.y()-tp.y());

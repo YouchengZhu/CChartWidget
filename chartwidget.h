@@ -236,6 +236,8 @@ public:
     void append(const DataPoint &p);
     void append(const QVector<DataPoint> &pts);
     void removeAt(int i);
+    void removeBefore(int count);   // 从头部删除 count 个点
+    void keepLast(int maxCount);    // 只保留最近 maxCount 个点
     void clear();
     const QVector<DataPoint>& data() const;
     int dataCount() const override;
