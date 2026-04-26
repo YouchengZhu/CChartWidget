@@ -27,20 +27,18 @@ static QWidget* createLineChartDemo(QWidget *parent)
     layout->addLayout(btnLayout);
 
     ChartWidget *chart = new ChartWidget;
-    chart->setTitle("Temperature Monitor");
-    chart->setLegendOrientation(ChartWidget::LegendOrientation::Vertical);
+    //chart->setTitle("Temperature Monitor");
+    chart->setLegendOrientation(Legend::Vertical); // 使用 Legend::Orientation
 
-    // X 轴：日期时间轴
-    Axis *axisX = new Axis(AxisPosition::Bottom);
+    // 获取默认轴并进行配置
+    Axis *axisX = chart->axisX();
     axisX->setTitle("Time");
     axisX->setSubTickCount(2);
-    chart->addAxis(axisX);
+    // 默认轴类型已是 Numeric，后续会自动根据数据调整（此处可保持默认）
 
-    // Y 轴：数值轴
-    Axis *axisY = new Axis(AxisPosition::Left);
+    Axis *axisY = chart->axisY();
     axisY->setTitle("Temperature (C)");
     axisY->setSubTickCount(4);
-    chart->addAxis(axisY);
 
     QDateTime base = QDateTime::currentDateTime().addSecs(-600);
 
@@ -72,7 +70,6 @@ static QWidget* createLineChartDemo(QWidget *parent)
     // 实时更新
     QTimer *timer = new QTimer(chart);
     static int tick = 60;
-    static bool darkMode = false;
     QObject::connect(timer, &QTimer::timeout, [=]() mutable {
         QDateTime now = QDateTime::currentDateTime();
         line1->append(now, 20.0 + 5.0 * std::sin(tick * 0.2) + (qrand() % 60) / 100.0);
@@ -99,11 +96,43 @@ static QWidget* createLineChartDemo(QWidget *parent)
         pm.save(path);
     });
 
-    // 主题切换
-    QObject::connect(btnTheme, &QPushButton::clicked, [chart, btnTheme]() mutable {
+    // 主题切换（同时设置 Axis 和 Legend 的样式以适配暗色主题）
+    QObject::connect(btnTheme, &QPushButton::clicked, [chart, btnTheme, axisX, axisY]() mutable {
         static bool dark = false;
         dark = !dark;
-        chart->setTheme(dark ? ChartTheme::dark() : ChartTheme::light());
+        if (dark) {
+            chart->setTheme(ChartTheme::dark());
+            // 轴样式
+            axisX->setTickColor(QColor(140,140,140));
+            axisX->setSubTickColor(QColor(80,80,80));
+            axisX->setGridColor(QColor(70,70,70));
+            axisX->setTitleColor(QColor(210,210,210));
+            axisY->setTickColor(QColor(140,140,140));
+            axisY->setSubTickColor(QColor(80,80,80));
+            axisY->setGridColor(QColor(70,70,70));
+            axisY->setTitleColor(QColor(210,210,210));
+            // 图例
+            Legend leg = chart->legend();
+            leg.borderColor = QColor(80,80,80);
+            leg.backgroundColor = QColor(50,50,50,220);
+            chart->setLegend(leg);
+        } else {
+            chart->setTheme(ChartTheme::light());
+            // 恢复默认轴样式
+            axisX->setTickColor(QColor(120,120,120));
+            axisX->setSubTickColor(QColor(200,200,200));
+            axisX->setGridColor(QColor(210,210,210));
+            axisX->setTitleColor(QColor(50,50,50));
+            axisY->setTickColor(QColor(120,120,120));
+            axisY->setSubTickColor(QColor(200,200,200));
+            axisY->setGridColor(QColor(210,210,210));
+            axisY->setTitleColor(QColor(50,50,50));
+            // 图例恢复
+            Legend leg = chart->legend();
+            leg.borderColor = QColor(180,180,180);
+            leg.backgroundColor = QColor(255,255,255,235);
+            chart->setLegend(leg);
+        }
         btnTheme->setText(dark ? "Theme: Dark" : "Theme: Light");
     });
 
@@ -120,8 +149,9 @@ static ChartWidget* createBarChart(QWidget *parent)
     chart->setTitle("Quarterly Sales");
     chart->setCategories({"Q1", "Q2", "Q3", "Q4"});
 
-    chart->addAxis(new Axis(AxisPosition::Left));
-    chart->addAxis(new Axis(AxisPosition::Bottom));
+    // 使用默认轴（不需额外配置）
+    chart->axisX()->setTitle("Quarter");
+    chart->axisY()->setTitle("Sales");
 
     BarSeries *b1 = new BarSeries("2024");
     b1->append(120); b1->append(150); b1->append(98); b1->append(180);
@@ -143,8 +173,8 @@ static ChartWidget* createStackedBarChart(QWidget *parent)
     chart->setTitle("Product Composition");
     chart->setCategories({"East", "South", "North", "West", "Central"});
 
-    chart->addAxis(new Axis(AxisPosition::Left));
-    chart->addAxis(new Axis(AxisPosition::Bottom));
+    chart->axisX()->setTitle("Region");
+    chart->axisY()->setTitle("Units");
 
     StackedBarSeries *s1 = new StackedBarSeries("Product A");
     s1->append(30); s1->append(45); s1->append(28); s1->append(22); s1->append(35);
@@ -168,12 +198,12 @@ static ChartWidget* createMixedChart(QWidget *parent)
 {
     ChartWidget *chart = new ChartWidget(parent);
     chart->setTitle("Monthly Revenue & Profit Rate");
-    chart->setLegendPosition(ChartWidget::LegendPosition::OutsideTop);
+    chart->setLegendPosition(Legend::AboveChart); // 外部图例
     chart->setCategories({"Jan","Feb","Mar","Apr","May","Jun",
                           "Jul","Aug","Sep","Oct","Nov","Dec"});
 
-    chart->addAxis(new Axis(AxisPosition::Left));
-    chart->addAxis(new Axis(AxisPosition::Bottom));
+    chart->axisX()->setTitle("Month");
+    chart->axisY()->setTitle("Revenue / Profit Rate");
 
     BarSeries *bars = new BarSeries("Revenue");
     double vals[] = {85,92,78,110,125,118,130,142,135,148,155,160};
@@ -197,22 +227,20 @@ static ChartWidget* createWeekLineChart(QWidget *parent)
 {
     ChartWidget *chart = new ChartWidget(parent);
     chart->setTitle("Weekly Activity (30 Samples)");
-    chart->setLegendPosition(ChartWidget::LegendPosition::OutsideTop);
+    chart->setLegendPosition(Legend::AboveChart);
 
-    // X 轴：日期时间轴
-    Axis *axisX = new Axis(AxisPosition::Bottom);
-    axisX->setType(AxisType::Date);             // ✅ 日期轴
-    axisX->setDateFormat(DateFormat::MMdd);     // ✅ 显示 MM-dd 格式
+    // 获取默认 X 轴，配置为日期类型
+    Axis *axisX = chart->axisX();
+    axisX->setType(AxisType::Date);             // 日期轴
+    axisX->setDateFormat(DateFormat::MMdd);     // 显示 MM-dd 格式
     axisX->setTitle("Date");
     axisX->setSubTickCount(2);
-    chart->addAxis(axisX);
 
-    // Y 轴：数值轴，范围 0-20
-    Axis *axisY = new Axis(AxisPosition::Left);
+    // 获取默认 Y 轴，固定范围 0-20
+    Axis *axisY = chart->axisY();
     axisY->setTitle("Score");
     axisY->setRange(0, 20);
     axisY->setSubTickCount(4);
-    chart->addAxis(axisY);
 
     // 本周一 00:00
     QDate today = QDate::currentDate();
@@ -244,7 +272,6 @@ static ChartWidget* createWeekLineChart(QWidget *parent)
     return chart;
 }
 
-
 // ========================================================================
 // 主函数
 // ========================================================================
@@ -262,7 +289,7 @@ int main(int argc, char *argv[])
     tabs->addTab(createBarChart(tabs),         "Bar Chart");
     tabs->addTab(createStackedBarChart(tabs),  "Stacked Bar");
     tabs->addTab(createMixedChart(tabs),       "Mixed Chart");
-    tabs->addTab(createWeekLineChart(tabs),    "Week Line");   // ← 新增
+    tabs->addTab(createWeekLineChart(tabs),    "Week Line");
 
     win.setCentralWidget(tabs);
     win.show();

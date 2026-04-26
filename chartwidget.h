@@ -28,7 +28,7 @@ enum class SeriesType      { Line, Bar, StackedBar };
 enum class ScatterStyle {
     None, Circle, Square, Diamond,
     Triangle, Cross, Plus, Star, Dot,
-        CustomPixmap  // 新增
+    CustomPixmap
 };
 
 // ========================================================================
@@ -44,26 +44,14 @@ struct DataPoint {
 };
 
 // ========================================================================
-// ChartTheme
+// ChartTheme（仅包含图表整体风格）
 // ========================================================================
 
 struct ChartTheme {
     QColor background       = QColor(252, 252, 252);
     QColor plotBackground   = QColor(255, 255, 255);
-    QColor textColor        = QColor(60, 60, 60);
     QColor titleColor       = QColor(40, 40, 40);
-    QColor axisTitleColor   = QColor(50, 50, 50);
-    QColor tickColor        = QColor(120, 120, 120);
-    QColor subTickColor     = QColor(200, 200, 200);
-    QColor gridColor        = QColor(210, 210, 210);
-    Qt::PenStyle gridStyle  = Qt::DashLine;
-    int     gridWidth       = 1;
-
-    QFont titleFont         = QFont("Microsoft YaHei", 13, QFont::Bold);
-    QFont labelFont         = QFont("Microsoft YaHei", 9);
-    QFont axisTitleFont     = QFont("Microsoft YaHei", 10, QFont::Bold);
-    QFont legendFont        = QFont("Microsoft YaHei", 9);
-    QFont tooltipFont       = QFont("Microsoft YaHei", 9);
+    QFont  titleFont        = QFont("Microsoft YaHei", 13, QFont::Bold);
 
     QList<QColor> seriesColors = {
         QColor(255, 77, 79),  QColor(54, 162, 235), QColor(255, 206, 86),
@@ -72,50 +60,27 @@ struct ChartTheme {
         QColor(241, 196, 15), QColor(26, 188, 156),  QColor(155, 89, 182),
     };
 
-    QColor legendBorder       = QColor(180, 180, 180);
-    QColor legendBackground   = QColor(255, 255, 255, 235);
-    int    legendRadius       = 4;
-
-    QColor tooltipBorder      = QColor(160, 160, 160);
-    QColor tooltipBackground  = QColor(255, 255, 255, 245);
-    QColor tooltipShadow      = QColor(0, 0, 0, 40);
-    int    tooltipRadius      = 6;
+    QFont  tooltipFont       = QFont("Microsoft YaHei", 9);
+    QColor tooltipBorder     = QColor(160, 160, 160);
+    QColor tooltipBackground = QColor(255, 255, 255, 245);
+    QColor tooltipShadow     = QColor(0, 0, 0, 40);
+    int    tooltipRadius     = 6;
 
     static ChartTheme light() { return ChartTheme{}; }
-
     static ChartTheme dark() {
         ChartTheme t;
-        t.background        = QColor(30, 30, 30);
-        t.plotBackground    = QColor(40, 40, 40);
-        t.textColor         = QColor(200, 200, 200);
-        t.titleColor        = QColor(230, 230, 230);
-        t.axisTitleColor    = QColor(210, 210, 210);
-        t.tickColor         = QColor(140, 140, 140);
-        t.subTickColor      = QColor(80, 80, 80);
-        t.gridColor         = QColor(70, 70, 70);
-        t.legendBorder      = QColor(80, 80, 80);
-        t.legendBackground  = QColor(50, 50, 50, 220);
-        t.tooltipBorder     = QColor(90, 90, 90);
+        t.background     = QColor(30, 30, 30);
+        t.plotBackground = QColor(40, 40, 40);
+        t.titleColor     = QColor(230, 230, 230);
+        t.tooltipBorder  = QColor(90, 90, 90);
         t.tooltipBackground = QColor(55, 55, 55, 240);
-        t.tooltipShadow     = QColor(0, 0, 0, 80);
-        return t;
-    }
-
-    static ChartTheme scientific() {
-        ChartTheme t;
-        t.background      = QColor(245, 245, 240);
-        t.gridColor       = QColor(200, 200, 200);
-        t.gridStyle       = Qt::SolidLine;
-        t.seriesColors = {
-            QColor(0,0,0), QColor(200,50,50), QColor(50,100,200),
-            QColor(0,150,100), QColor(180,100,30), QColor(120,50,150),
-        };
+        t.tooltipShadow  = QColor(0, 0, 0, 80);
         return t;
     }
 };
 
 // ========================================================================
-// Axis：纯数据容器
+// Axis：坐标轴样式全部内聚
 // ========================================================================
 
 class Axis {
@@ -139,6 +104,8 @@ public:
     QFont labelFont() const;
     void setTitleFont(const QFont &f);
     QFont titleFont() const;
+    void setTitleColor(const QColor &c);
+    QColor titleColor() const;
 
     void setTickCount(int n);
     int  tickCount() const;
@@ -166,6 +133,10 @@ public:
     bool isVerticalGridVisible() const;
     void setGridColor(const QColor &c);
     QColor gridColor() const;
+    void setGridStyle(Qt::PenStyle s);
+    Qt::PenStyle gridStyle() const;
+    void setGridWidth(int w);
+    int  gridWidth() const;
 
     void setNotation(NumericNotation n);
     NumericNotation notation() const;
@@ -183,28 +154,50 @@ private:
     bool   m_autoRange = true;
     double m_min = 0.0, m_max = 100.0;
     QString m_title;
-    QFont  m_labelFont, m_titleFont;
+    QFont  m_labelFont  = QFont("Microsoft YaHei", 9);
+    QFont  m_titleFont  = QFont("Microsoft YaHei", 10, QFont::Bold);
+    QColor m_titleColor = QColor(50, 50, 50);
 
     int  m_tickCount = 6;
     bool m_ticksVisible = true;
-    QColor        m_tickColor;
+    QColor        m_tickColor = QColor(120, 120, 120);
     TickDirection m_tickDirection = TickDirection::Outside;
 
     int  m_subTickCount = 4;
     bool m_subTicksVisible = true;
-    QColor        m_subTickColor;
+    QColor        m_subTickColor = QColor(200, 200, 200);
     TickDirection m_subTickDirection = TickDirection::Inside;
 
     bool   m_gridVisible = true;
     bool   m_horizontalGridVisible = true;
     bool   m_verticalGridVisible = true;
-    QColor m_gridColor;
+    QColor m_gridColor  = QColor(210, 210, 210);
+    Qt::PenStyle m_gridStyle = Qt::DashLine;
+    int    m_gridWidth  = 1;
 
     NumericNotation m_notation = NumericNotation::Decimal;
     int m_precision = -1;
 
     DateTimeFormat m_dateTimeFmt = DateTimeFormat::HHmmss;
     DateFormat     m_dateFmt     = DateFormat::yyyyMMdd;
+};
+
+// ========================================================================
+// Legend：图例样式独立类
+// ========================================================================
+
+class Legend {
+public:
+    enum Position { TopRight = 0, Top, Bottom, Hidden, AboveChart };
+    enum Orientation { Horizontal, Vertical };
+
+    Position    position    = TopRight;
+    Orientation orientation = Horizontal;
+
+    QFont  font            = QFont("Microsoft YaHei", 9);
+    QColor borderColor     = QColor(180, 180, 180);
+    QColor backgroundColor = QColor(255, 255, 255, 235);
+    int    borderRadius    = 4;
 };
 
 // ========================================================================
@@ -237,8 +230,8 @@ public:
     void append(const DataPoint &p);
     void append(const QVector<DataPoint> &pts);
     void removeAt(int i);
-    void removeBefore(int count);   // 从头部删除 count 个点
-    void keepLast(int maxCount);    // 只保留最近 maxCount 个点
+    void removeBefore(int count);
+    void keepLast(int maxCount);
     void clear();
     const QVector<DataPoint>& data() const;
     int dataCount() const override;
@@ -252,8 +245,8 @@ public:
     QBrush fillBrush() const;
     void setFillEnabled(bool on);
     bool isFillEnabled() const;
-    void setPixmap(const QPixmap &pm){m_pixmap = pm;}     // 新增
-    QPixmap pixmap() const{ return m_pixmap; }                // 新增
+    void setPixmap(const QPixmap &pm);
+    QPixmap pixmap() const;
 private:
     QVector<DataPoint> m_data;
     double       m_lineWidth    = 2.0;
@@ -261,7 +254,7 @@ private:
     ScatterStyle m_scatterStyle = ScatterStyle::Circle;
     QBrush       m_fillBrush;
     bool         m_fillEnabled  = false;
-        QPixmap m_pixmap;                      // 新增
+    QPixmap      m_pixmap;
 };
 
 class BarSeries : public Series {
@@ -301,7 +294,7 @@ private:
 };
 
 // ========================================================================
-// ChartModel：数据管理 + 信号
+// ChartModel
 // ========================================================================
 
 class ChartModel : public QObject {
@@ -352,7 +345,7 @@ private:
 };
 
 // ========================================================================
-// ChartLayout：布局计算引擎
+// ChartLayout
 // ========================================================================
 
 class ChartLayout : public QObject {
@@ -407,7 +400,7 @@ private:
 };
 
 // ========================================================================
-// ChartRenderer：纯绘制层
+// ChartRenderer
 // ========================================================================
 
 class ChartRenderer {
@@ -429,7 +422,7 @@ public:
     void drawAxes(QPainter &p);
     void drawTitle(QPainter &p);
     void drawLegend(QPainter &p, const QRectF &plotArea,
-                    const QList<Series*> &visible, int pos, int ori);
+                    const QList<Series*> &visible, const Legend &legend);
     void drawTooltip(QPainter &p, const TooltipData &tip);
 
 private:
@@ -444,21 +437,22 @@ private:
 };
 
 // ========================================================================
-// ChartWidget：交互层
+// ChartWidget
 // ========================================================================
 
 class ChartWidget : public QWidget {
     Q_OBJECT
 public:
-    enum class LegendPosition    { TopRight, Top, Bottom, Hidden, OutsideTop  };
-    enum class LegendOrientation { Horizontal, Vertical };
-    enum class RescaleMode       { AutoFit, FitVisible, Manual };
+    enum class RescaleMode { AutoFit, FitVisible, Manual };
 
     explicit ChartWidget(QWidget *parent = nullptr);
     ~ChartWidget();
 
     ChartModel*  model()  const;
     ChartLayout* layout() const;
+
+    Axis* axisX() const;
+    Axis* axisY() const;
 
     void addAxis(Axis *axis);
     void removeAxis(Axis *axis);
@@ -468,16 +462,16 @@ public:
     void setTitle(const QString &t);
     void setTheme(const ChartTheme &t);
 
+    void setLegend(const Legend &legend);
+    Legend legend() const;
+    void setLegendPosition(Legend::Position pos);
+    void setLegendOrientation(Legend::Orientation ori);
+
     void setRescaleMode(RescaleMode mode);
     RescaleMode rescaleMode() const;
     void fitToData();
     void zoom(double factor);
     void zoomTo(double xMin, double xMax, double yMin, double yMax);
-
-    void setLegendPosition(LegendPosition pos);
-    LegendPosition legendPosition() const;
-    void setLegendOrientation(LegendOrientation ori);
-    LegendOrientation legendOrientation() const;
 
     void setTooltipEnabled(bool on);
     bool isTooltipEnabled() const;
@@ -533,8 +527,7 @@ private:
     QColor  m_tooltipColor;
     QPoint  m_mouseScreen;
 
-    LegendPosition    m_legendPosition    = LegendPosition::TopRight;
-    LegendOrientation m_legendOrientation = LegendOrientation::Horizontal;
+    Legend m_legend;
 };
 
 #endif // CHARTWIDGET_H

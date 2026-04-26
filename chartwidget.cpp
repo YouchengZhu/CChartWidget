@@ -17,7 +17,7 @@ static constexpr double kPi = 3.14159265358979323846;
 static constexpr double kMarginRatio = 0.08;
 
 // ========================================================================
-//  Axis
+//  Axis 实现
 // ========================================================================
 
 Axis::Axis(AxisPosition pos) : m_position(pos) {}
@@ -39,6 +39,8 @@ void  Axis::setLabelFont(const QFont &f) { m_labelFont = f; }
 QFont Axis::labelFont() const { return m_labelFont; }
 void  Axis::setTitleFont(const QFont &f) { m_titleFont = f; }
 QFont Axis::titleFont() const { return m_titleFont; }
+void  Axis::setTitleColor(const QColor &c) { m_titleColor = c; }
+QColor Axis::titleColor() const { return m_titleColor; }
 
 void Axis::setTickCount(int n) { m_tickCount = qMax(2, n); }
 int  Axis::tickCount() const { return m_tickCount; }
@@ -66,6 +68,10 @@ void Axis::setVerticalGridVisible(bool on) { m_verticalGridVisible = on; }
 bool Axis::isVerticalGridVisible() const { return m_verticalGridVisible; }
 void    Axis::setGridColor(const QColor &c) { m_gridColor = c; }
 QColor  Axis::gridColor() const { return m_gridColor; }
+void    Axis::setGridStyle(Qt::PenStyle s) { m_gridStyle = s; }
+Qt::PenStyle Axis::gridStyle() const { return m_gridStyle; }
+void    Axis::setGridWidth(int w) { m_gridWidth = qMax(1, w); }
+int     Axis::gridWidth() const { return m_gridWidth; }
 
 void Axis::setNotation(NumericNotation n) { m_notation = n; }
 NumericNotation Axis::notation() const { return m_notation; }
@@ -78,7 +84,7 @@ void Axis::setDateFormat(DateFormat f) { m_dateFmt = f; }
 DateFormat Axis::dateFormat() const { return m_dateFmt; }
 
 // ========================================================================
-//  Series
+//  Series 实现
 // ========================================================================
 
 Series::Series(const QString &name, SeriesType type)
@@ -92,29 +98,23 @@ bool Series::isVisible() const { return m_visible; }
 void   Series::setColor(const QColor &c) { m_color = c; }
 QColor Series::color() const { return m_color; }
 
-// --- LineSeries ---
 LineSeries::LineSeries(const QString &name) : Series(name, SeriesType::Line) {}
 void LineSeries::append(double x, double y) { m_data.append(DataPoint(x, y)); }
 void LineSeries::append(const QDateTime &tx, double y) { m_data.append(DataPoint(tx, y)); }
 void LineSeries::append(const DataPoint &p) { m_data.append(p); }
 void LineSeries::append(const QVector<DataPoint> &pts) { m_data.append(pts); }
 void LineSeries::removeAt(int i) { if (i >= 0 && i < m_data.size()) m_data.removeAt(i); }
-
-void LineSeries::removeBefore(int count)
-{
+void LineSeries::removeBefore(int count) {
     int n = qMin(count, m_data.size());
     if (n > 0) m_data.erase(m_data.begin(), m_data.begin() + n);
 }
-
-void LineSeries::keepLast(int maxCount)
-{
+void LineSeries::keepLast(int maxCount) {
     if (m_data.size() > maxCount)
         m_data.erase(m_data.begin(), m_data.begin() + m_data.size() - maxCount);
 }
 void LineSeries::clear() { m_data.clear(); }
 const QVector<DataPoint>& LineSeries::data() const { return m_data; }
 int LineSeries::dataCount() const { return m_data.size(); }
-
 void   LineSeries::setLineWidth(double w) { m_lineWidth = w; }
 double LineSeries::lineWidth() const { return m_lineWidth; }
 void   LineSeries::setMarkerSize(double s) { m_markerSize = s; }
@@ -125,8 +125,9 @@ void   LineSeries::setFillBrush(const QBrush &b) { m_fillBrush = b; }
 QBrush LineSeries::fillBrush() const { return m_fillBrush; }
 void   LineSeries::setFillEnabled(bool on) { m_fillEnabled = on; }
 bool   LineSeries::isFillEnabled() const { return m_fillEnabled; }
+void   LineSeries::setPixmap(const QPixmap &pm) { m_pixmap = pm; }
+QPixmap LineSeries::pixmap() const { return m_pixmap; }
 
-// --- BarSeries ---
 BarSeries::BarSeries(const QString &name) : Series(name, SeriesType::Bar) {}
 void BarSeries::append(double v) { m_data.append(v); m_useXY = false; }
 void BarSeries::appendXY(double x, double y) { m_xyData.append({x, y}); m_useXY = true; }
@@ -142,7 +143,6 @@ int  BarSeries::dataCount() const { return m_useXY ? m_xyData.size() : m_data.si
 void   BarSeries::setBarWidthRatio(double r) { m_barWidthRatio = qBound(0.1, r, 1.0); }
 double BarSeries::barWidthRatio() const { return m_barWidthRatio; }
 
-// --- StackedBarSeries ---
 StackedBarSeries::StackedBarSeries(const QString &name)
     : Series(name, SeriesType::StackedBar) {}
 void StackedBarSeries::append(double v) { m_data.append(v); }
@@ -154,7 +154,7 @@ void   StackedBarSeries::setBarWidthRatio(double r) { m_barWidthRatio = qBound(0
 double StackedBarSeries::barWidthRatio() const { return m_barWidthRatio; }
 
 // ========================================================================
-//  ChartModel
+//  ChartModel 实现
 // ========================================================================
 
 ChartModel::ChartModel(QObject *parent) : QObject(parent) {}
@@ -227,11 +227,12 @@ QColor ChartModel::nextColor()
 {
     const auto &pal = m_theme.seriesColors;
     if (pal.isEmpty()) return QColor(128, 128, 128);
-    return pal[(m_colorIndex++) % pal.size()];
+    m_colorIndex = (m_colorIndex + 1) % pal.size();
+    return pal[(m_colorIndex - 1 + pal.size()) % pal.size()];
 }
 
 // ========================================================================
-//  ChartLayout
+//  ChartLayout 实现
 // ========================================================================
 
 ChartLayout::ChartLayout(ChartModel *model, QObject *parent)
@@ -240,11 +241,7 @@ ChartLayout::ChartLayout(ChartModel *model, QObject *parent)
     connect(m_model, &ChartModel::dataChanged, this, &ChartLayout::invalidate);
 }
 
-void ChartLayout::setOutsideLegendHeight(double h)
-{
-    m_outsideLegendHeight = h;
-}
-
+void ChartLayout::setOutsideLegendHeight(double h) { m_outsideLegendHeight = h; }
 void ChartLayout::invalidate() { m_dirty = true; }
 QRectF ChartLayout::plotArea() const { return m_plotArea; }
 double ChartLayout::xMin() const { return m_xMin; }
@@ -435,10 +432,9 @@ void ChartLayout::computeLayout(int w, int h)
 {
     Axis *ax = m_model->axisX();
     Axis *ay = m_model->axisY();
-    const ChartTheme &theme = m_model->theme();
 
-    QFontMetrics lfm(ay ? ay->labelFont() : theme.labelFont);
-    QFontMetrics tfm(ax ? ax->titleFont() : theme.axisTitleFont);
+    QFontMetrics lfm(ay ? ay->labelFont() : QFont("Microsoft YaHei", 9));
+    QFontMetrics tfm(ax ? ax->titleFont() : QFont("Microsoft YaHei", 10, QFont::Bold));
 
     double left = m_margin, top = m_margin, right = m_margin, bottom = m_margin;
 
@@ -447,7 +443,7 @@ void ChartLayout::computeLayout(int w, int h)
     }
 
     if (!m_model->title().isEmpty()) {
-        QFontMetrics fm(theme.titleFont);
+        QFontMetrics fm(m_model->theme().titleFont);
         top += fm.height() + 4;
     }
     if (ay) {
@@ -547,7 +543,7 @@ int ChartLayout::decimalsForStep(double step)
 }
 
 // ========================================================================
-//  ChartRenderer
+//  ChartRenderer 实现
 // ========================================================================
 
 ChartRenderer::ChartRenderer(ChartModel *model, ChartLayout *layout)
@@ -584,10 +580,9 @@ void ChartRenderer::drawGrid(QPainter &p)
     Axis *ax = m_model->axisX(), *ay = m_model->axisY();
     if (!ax || !ay) return;
     QRectF pa = m_layout->plotArea();
-    const ChartTheme &t = m_model->theme();
 
     if (ay->isGridVisible() && ay->isHorizontalGridVisible()) {
-        p.setPen(QPen(t.gridColor, t.gridWidth, t.gridStyle));
+        p.setPen(QPen(ay->gridColor(), ay->gridWidth(), ay->gridStyle()));
         for (double v : m_layout->yTicks()) {
             QPointF pt = m_layout->mapToPixel(m_layout->xMin(), v);
             if (pt.y() >= pa.top() && pt.y() <= pa.bottom())
@@ -595,7 +590,7 @@ void ChartRenderer::drawGrid(QPainter &p)
         }
     }
     if (ax->isGridVisible() && ax->isVerticalGridVisible()) {
-        p.setPen(QPen(t.gridColor, t.gridWidth, t.gridStyle));
+        p.setPen(QPen(ax->gridColor(), ax->gridWidth(), ax->gridStyle()));
         for (double v : m_layout->xTicks()) {
             QPointF pt = m_layout->mapToPixel(v, m_layout->yMin());
             if (pt.x() >= pa.left() && pt.x() <= pa.right())
@@ -627,7 +622,6 @@ void ChartRenderer::drawLine(QPainter &p, LineSeries *s)
     p.save();
     p.setClipRect(pa.adjusted(-1, -1, 1, 1));
 
-    // ========== 填充区域（修复渐变映射）==========
     if (s->isFillEnabled() && data.size() >= 2) {
         QPolygonF fp;
         for (const auto &pt : data)
@@ -636,10 +630,8 @@ void ChartRenderer::drawLine(QPainter &p, LineSeries *s)
         fp << m_layout->mapToPixel(data.first().x, m_layout->yMin());
         fp << m_layout->mapToPixel(data.first().x, data.first().y);
 
-        // 根据多边形实际边界重新映射渐变
         QRectF polyBounds = fp.boundingRect();
 
-        // 从用户的 fillBrush 中提取渐变信息，重新映射到实际区域
         QBrush originalBrush = s->fillBrush();
         QBrush mappedBrush;
 
@@ -648,21 +640,14 @@ void ChartRenderer::drawLine(QPainter &p, LineSeries *s)
             originalBrush.style() == Qt::ConicalGradientPattern) {
 
             const QGradient *origGrad = originalBrush.gradient();
-
-            // 创建新的线性渐变，从填充区域顶部到底部
             QLinearGradient mappedGrad(polyBounds.topLeft(), polyBounds.bottomLeft());
-
-            // 复制原始渐变的所有色标
             QGradientStops stops = origGrad->stops();
             for (const auto &stop : stops) {
                 mappedGrad.setColorAt(stop.first, stop.second);
             }
-
-            // 复制渐变属性
             mappedGrad.setSpread(origGrad->spread());
             mappedBrush = QBrush(mappedGrad);
         } else {
-            // 非渐变画刷（纯色等），直接使用
             mappedBrush = originalBrush;
         }
 
@@ -671,7 +656,6 @@ void ChartRenderer::drawLine(QPainter &p, LineSeries *s)
         p.drawPolygon(fp);
     }
 
-    // ========== 折线（不变）==========
     if (data.size() >= 2) {
         QPolygonF poly;
         for (const auto &pt : data)
@@ -681,15 +665,13 @@ void ChartRenderer::drawLine(QPainter &p, LineSeries *s)
         p.drawPolyline(poly);
     }
 
-    // ========== 散点（不变）==========
     ScatterStyle ss = s->scatterStyle();
     double ms = s->markerSize();
     if (ss != ScatterStyle::None && ms > 0) {
         p.setPen(Qt::NoPen);
         if (ss == ScatterStyle::CustomPixmap && !s->pixmap().isNull()) {
-            // ===== 新增：绘制自定义 pixmap =====
             QPixmap pm = s->pixmap();
-            double scale = ms / 5.0;  // 以 markerSize=5 为原始大小
+            double scale = ms / 5.0;
             QPixmap scaled = pm.scaled(int(pm.width() * scale),
                                        int(pm.height() * scale),
                                        Qt::KeepAspectRatio,
@@ -701,7 +683,6 @@ void ChartRenderer::drawLine(QPainter &p, LineSeries *s)
                 p.drawPixmap(int(pos.x() - hw), int(pos.y() - hh), scaled);
             }
         } else {
-            // 原有散点绘制
             for (const auto &pt : data)
                 drawScatter(p, ss, m_layout->mapToPixel(pt.x, pt.y), ms, s->color());
         }
@@ -745,20 +726,14 @@ void ChartRenderer::drawBar(QPainter &p, BarSeries *s)
         double singleW = groupW / qMax(1, totalBars);
 
         for (int i = 0; i < vals.size(); ++i) {
-            // 用 mapToPixel 计算分类中心的像素 X 坐标
             QPointF centerPt = m_layout->mapToPixel(double(i), 0);
             double cx = centerPt.x();
-
-            // 超出绘图区域则跳过
             if (cx < pa.left() - groupW || cx > pa.right() + groupW) continue;
 
             double barLeft = cx - groupW / 2.0 + barIdx * singleW;
-
-            // 用 mapToPixel 计算柱顶和柱底的像素 Y 坐标
             double yClamped = qBound(m_layout->yMin(), vals[i], m_layout->yMax());
             QPointF topPt = m_layout->mapToPixel(0, vals[i]);
             QPointF botPt = m_layout->mapToPixel(0, qMax(m_layout->yMin(), 0.0));
-
             double barTop = qMin(topPt.y(), botPt.y());
             double barH   = qAbs(botPt.y() - topPt.y());
             if (barH < 1.0) barH = 1.0;
@@ -794,11 +769,8 @@ void ChartRenderer::drawStackedBar(QPainter &p)
     p.setClipRect(pa.adjusted(-1,-1,1,1));
 
     for (int i = 0; i < nCat; ++i) {
-        // 用 mapToPixel 计算分类中心的像素 X 坐标
         QPointF centerPt = m_layout->mapToPixel(double(i), 0);
         double cx = centerPt.x();
-
-        // 超出绘图区域则跳过
         if (cx < pa.left() - barW || cx > pa.right() + barW) continue;
 
         double barLeft = cx - barW / 2.0;
@@ -808,7 +780,6 @@ void ChartRenderer::drawStackedBar(QPainter &p)
             double bv, tv;
             if (val >= 0) { bv = cumPos; tv = cumPos+val; cumPos = tv; }
             else          { bv = cumNeg+val; tv = cumNeg; cumNeg = bv; }
-            // 用 mapToPixel 计算像素 Y 坐标
             QPointF tp = m_layout->mapToPixel(0, tv);
             QPointF bp = m_layout->mapToPixel(0, bv);
             QRectF r(barLeft, tp.y(), barW, bp.y()-tp.y());
@@ -885,21 +856,19 @@ void ChartRenderer::drawAxes(QPainter &p)
 {
     Axis *ax = m_model->axisX(), *ay = m_model->axisY();
     if (!ax || !ay) return;
-    const ChartTheme &t = m_model->theme();
     QRectF pa = m_layout->plotArea();
-    QFontMetrics lfm(ay->labelFont());
-    QFontMetrics tfm(ax->titleFont());
 
     // ---- Y 轴 ----
     QVector<double> yt = m_layout->yTicks();
     if (ay->isTicksVisible()) {
         p.setFont(ay->labelFont());
+        QFontMetrics fm(ay->labelFont());
         for (double v : yt) {
             QPointF pt = m_layout->mapToPixel(m_layout->xMin(), v);
             if (pt.y() < pa.top()-1 || pt.y() > pa.bottom()+1) continue;
             QString txt = m_layout->formatAxisValue(ay, v);
-            p.setPen(t.textColor);
-            p.drawText(QPointF(pa.left()-lfm.width(txt)-6, pt.y()+lfm.ascent()/2.0-1), txt);
+            p.setPen(ay->titleColor());
+            p.drawText(QPointF(pa.left()-fm.width(txt)-6, pt.y()+fm.ascent()/2.0-1), txt);
             p.setPen(QPen(ay->tickColor(), 1));
             bool in = (ay->tickDirection() == TickDirection::Inside);
             if (in) p.drawLine(QPointF(pa.left(), pt.y()), QPointF(pa.left()+4, pt.y()));
@@ -920,7 +889,7 @@ void ChartRenderer::drawAxes(QPainter &p)
         }
     }
     if (!ay->title().isEmpty()) {
-        p.save(); p.setFont(ay->titleFont()); p.setPen(t.axisTitleColor);
+        p.save(); p.setFont(ay->titleFont()); p.setPen(ay->titleColor());
         p.translate(QPointF(pa.left()-40, pa.center().y())); p.rotate(-90);
         QFontMetrics fm(ay->titleFont());
         p.drawText(QPointF(-fm.width(ay->title())/2.0, 0), ay->title());
@@ -931,12 +900,13 @@ void ChartRenderer::drawAxes(QPainter &p)
     QVector<double> xt = m_layout->xTicks();
     if (ax->isTicksVisible()) {
         p.setFont(ax->labelFont());
+        QFontMetrics fm(ax->labelFont());
         for (double v : xt) {
             QPointF pt = m_layout->mapToPixel(v, m_layout->yMin());
             if (pt.x() < pa.left()-1 || pt.x() > pa.right()+1) continue;
             QString txt = m_layout->formatAxisValue(ax, v);
-            p.setPen(t.textColor);
-            p.drawText(QPointF(pt.x()-lfm.width(txt)/2.0, pa.bottom()+lfm.ascent()+4), txt);
+            p.setPen(ax->titleColor());
+            p.drawText(QPointF(pt.x()-fm.width(txt)/2.0, pa.bottom()+fm.ascent()+4), txt);
             p.setPen(QPen(ax->tickColor(), 1));
             bool in = (ax->tickDirection() == TickDirection::Inside);
             if (in) p.drawLine(QPointF(pt.x(), pa.bottom()), QPointF(pt.x(), pa.bottom()-4));
@@ -957,9 +927,10 @@ void ChartRenderer::drawAxes(QPainter &p)
         }
     }
     if (!ax->title().isEmpty()) {
-        p.setFont(ax->titleFont()); p.setPen(t.axisTitleColor);
-        double tw = tfm.width(ax->title());
-        p.drawText(QPointF(pa.center().x()-tw/2.0, pa.bottom()+lfm.ascent()+tfm.height()+8), ax->title());
+        p.setFont(ax->titleFont()); p.setPen(ax->titleColor());
+        QFontMetrics fm(ax->titleFont());
+        double tw = fm.width(ax->title());
+        p.drawText(QPointF(pa.center().x()-tw/2.0, pa.bottom()+fm.height()+8), ax->title());
     }
 }
 
@@ -975,20 +946,17 @@ void ChartRenderer::drawTitle(QPainter &p)
 }
 
 void ChartRenderer::drawLegend(QPainter &p, const QRectF &plotArea,
-                               const QList<Series*> &visible, int pos, int ori)
+                               const QList<Series*> &visible, const Legend &legend)
 {
-    if (visible.isEmpty()) return;
-    if (pos == 3 /* Hidden */ || pos == 4 /* OutsideTop */) return;
+    if (visible.isEmpty() || legend.position == Legend::Hidden) return;
 
-    const ChartTheme &theme = m_model->theme();
-    p.setFont(theme.legendFont);
-    QFontMetrics fm(theme.legendFont);
-
+    p.setFont(legend.font);
+    QFontMetrics fm(legend.font);
     const int swatchW = 14, swatchH = 10, gap = 6, itemGap = 14, pad = 8;
     int rowH = qMax(fm.height(), swatchH) + 4;
     int legendW, legendH;
 
-    if (ori == 1) { // Horizontal
+    if (legend.orientation == Legend::Horizontal) {
         int totalW = 0;
         for (Series *s : visible) totalW += swatchW + gap + fm.width(s->name());
         totalW += (visible.size()-1) * itemGap;
@@ -1001,25 +969,29 @@ void ChartRenderer::drawLegend(QPainter &p, const QRectF &plotArea,
     }
 
     double lx, ly;
-    switch (pos) {
-    case 1: lx = plotArea.left()+(plotArea.width()-legendW)/2.0; ly = plotArea.top()+4; break;
-    case 2: lx = plotArea.left()+(plotArea.width()-legendW)/2.0; ly = plotArea.bottom()-legendH-4; break;
-    case 3: break; // Hidden
-    default: lx = plotArea.right()-legendW-6; ly = plotArea.top()+4; break;
+    switch (legend.position) {
+    case Legend::Top:      lx = plotArea.left()+(plotArea.width()-legendW)/2.0; ly = plotArea.top()+4; break;
+    case Legend::Bottom:   lx = plotArea.left()+(plotArea.width()-legendW)/2.0; ly = plotArea.bottom()-legendH-4; break;
+    case Legend::AboveChart:
+        // 外部图例：位于绘图区上方，水平居中
+        lx = plotArea.left() + (plotArea.width() - legendW) / 2.0;
+        ly = plotArea.top() - legendH - 4;
+        break;
+    default: // TopRight
+        lx = plotArea.right()-legendW-6; ly = plotArea.top()+4; break;
     }
-    if (pos == 3) return; // Hidden
 
     QRectF lr(lx, ly, legendW, legendH);
-    p.setPen(QPen(theme.legendBorder, 1));
-    p.setBrush(theme.legendBackground);
-    p.drawRoundedRect(lr, theme.legendRadius, theme.legendRadius);
+    p.setPen(QPen(legend.borderColor, 1));
+    p.setBrush(legend.backgroundColor);
+    p.drawRoundedRect(lr, legend.borderRadius, legend.borderRadius);
 
     double cx = lx+pad, cy = ly+pad;
-    if (ori == 1) { // Horizontal
+    if (legend.orientation == Legend::Horizontal) {
         for (Series *s : visible) {
             QRectF sw(cx, cy+(rowH-swatchH)/2.0, swatchW, swatchH);
             p.fillRect(sw, s->color()); p.setPen(s->color().darker(130)); p.drawRect(sw);
-            p.setPen(theme.textColor);
+            p.setPen(QColor(60,60,60));
             p.drawText(QPointF(cx+swatchW+gap, cy+fm.ascent()+(rowH-fm.height())/2.0-1), s->name());
             cx += swatchW+gap+fm.width(s->name())+itemGap;
         }
@@ -1027,12 +999,13 @@ void ChartRenderer::drawLegend(QPainter &p, const QRectF &plotArea,
         for (Series *s : visible) {
             QRectF sw(cx, cy+(rowH-swatchH)/2.0, swatchW, swatchH);
             p.fillRect(sw, s->color()); p.setPen(s->color().darker(130)); p.drawRect(sw);
-            p.setPen(theme.textColor);
+            p.setPen(QColor(60,60,60));
             p.drawText(QPointF(cx+swatchW+gap, cy+fm.ascent()+(rowH-fm.height())/2.0-1), s->name());
             cy += rowH+2;
         }
     }
 }
+
 
 void ChartRenderer::drawTooltip(QPainter &p, const TooltipData &tip)
 {
@@ -1080,7 +1053,7 @@ void ChartRenderer::drawTooltip(QPainter &p, const TooltipData &tip)
             QRectF sw(textX, ly-fm.ascent()+(fm.height()-swatchH)/2.0, swatchW, swatchH);
             p.fillRect(sw, c); p.setPen(c.darker(140)); p.setBrush(Qt::NoBrush); p.drawRect(sw);
         }
-        p.setPen(t.textColor);
+        p.setPen(QColor(60,60,60));
         p.drawText(QPointF(textX+swatchW+swatchGap, ly), lines[i].text);
     }
 
@@ -1090,7 +1063,7 @@ void ChartRenderer::drawTooltip(QPainter &p, const TooltipData &tip)
 }
 
 // ========================================================================
-//  ChartWidget
+//  ChartWidget 实现
 // ========================================================================
 
 ChartWidget::ChartWidget(QWidget *parent) : QWidget(parent)
@@ -1118,7 +1091,13 @@ void ChartWidget::ensureComponents()
     }
     if (!m_layout)  m_layout  = new ChartLayout(m_model, this);
     if (!m_renderer) m_renderer = new ChartRenderer(m_model, m_layout);
+
+    if (!m_model->axisX()) addAxis(new Axis(AxisPosition::Bottom));
+    if (!m_model->axisY()) addAxis(new Axis(AxisPosition::Left));
 }
+
+Axis* ChartWidget::axisX() const { return m_model->axisX(); }
+Axis* ChartWidget::axisY() const { return m_model->axisY(); }
 
 ChartModel*  ChartWidget::model()  const { return m_model; }
 ChartLayout* ChartWidget::layout() const { return m_layout; }
@@ -1130,6 +1109,11 @@ void ChartWidget::removeSeries(Series *s)                    { m_model->removeSe
 void ChartWidget::setCategories(const QStringList &c)        { m_model->setCategories(c); markDirty(); }
 void ChartWidget::setTitle(const QString &t)                 { m_model->setTitle(t); markDirty(); }
 void ChartWidget::setTheme(const ChartTheme &t)              { m_model->setTheme(t); markDirty(); }
+
+void ChartWidget::setLegend(const Legend &legend) { m_legend = legend; markDirty(); }
+Legend ChartWidget::legend() const { return m_legend; }
+void ChartWidget::setLegendPosition(Legend::Position pos) { m_legend.position = pos; markDirty(); }
+void ChartWidget::setLegendOrientation(Legend::Orientation ori) { m_legend.orientation = ori; markDirty(); }
 
 void ChartWidget::setRescaleMode(RescaleMode m)              { m_rescaleMode = m; markDirty(); }
 ChartWidget::RescaleMode ChartWidget::rescaleMode() const    { return m_rescaleMode; }
@@ -1159,11 +1143,6 @@ void ChartWidget::zoomTo(double x1, double x2, double y1, double y2)
     m_rescaleMode = RescaleMode::Manual;
     markDirty();
 }
-
-void ChartWidget::setLegendPosition(LegendPosition p)          { m_legendPosition = p; markDirty(); }
-ChartWidget::LegendPosition ChartWidget::legendPosition() const { return m_legendPosition; }
-void ChartWidget::setLegendOrientation(LegendOrientation o)    { m_legendOrientation = o; markDirty(); }
-ChartWidget::LegendOrientation ChartWidget::legendOrientation() const { return m_legendOrientation; }
 
 void ChartWidget::setTooltipEnabled(bool on) { m_tooltipEnabled = on; if (!on) { m_showTooltip = false; update(); } }
 bool ChartWidget::isTooltipEnabled() const { return m_tooltipEnabled; }
@@ -1203,61 +1182,23 @@ void ChartWidget::paintEvent(QPaintEvent *)
     painter.drawPixmap(0, 0, m_buffer);
 }
 
-// void ChartWidget::rebuildBuffer()
-// {
-//     // ===== 新增：计算外部图例高度并传递给布局 =====
-//     QList<Series*> vis;
-//     for (Series *s : m_model->seriesList()) if (s->isVisible()) vis.append(s);
-
-//     double outsideLegendH = 0;
-//     if (m_legendPosition == LegendPosition::OutsideTop && !vis.isEmpty()) {
-//         const ChartTheme &theme = m_model->theme();
-//         QFontMetrics fm(theme.legendFont);
-//         const int swatchW = 14, gap = 6, pad = 8;
-//         int maxItemW = 0;
-//         for (Series *s : vis)
-//             maxItemW = qMax(maxItemW, swatchW + gap + fm.width(s->name()));
-//         outsideLegendH = fm.height() + pad * 2 + 4;  // 4px 与下方间距
-//     }
-//     m_layout->setOutsideLegendHeight(outsideLegendH);
-
-//     m_buffer = QPixmap(size());
-//     m_buffer.fill(m_model->theme().background);
-//     QPainter p(&m_buffer);
-//     m_layout->recalculate(width(), height());
-//     m_renderer->render(p, width(), height());
-
-//     // 图例
-//     QList<Series*> vis;
-//     for (Series *s : m_model->seriesList()) if (s->isVisible()) vis.append(s);
-//     m_renderer->drawLegend(p, m_layout->plotArea(), vis,
-//                            int(m_legendPosition), int(m_legendOrientation));
-
-//     // 提示框
-//     if (m_showTooltip) {
-//         ChartRenderer::TooltipData tip;
-//         tip.visible = true; tip.position = m_tooltipPos;
-//         tip.text = m_tooltipText; tip.color = m_tooltipColor;
-//         m_renderer->drawTooltip(p, tip);
-//     }
-//     m_bufferDirty = false;
-// }
-
 void ChartWidget::rebuildBuffer()
 {
-    // ===== 新增：计算外部图例高度并传递给布局 =====
     QList<Series*> vis;
     for (Series *s : m_model->seriesList()) if (s->isVisible()) vis.append(s);
 
     double outsideLegendH = 0;
-    if (m_legendPosition == LegendPosition::OutsideTop && !vis.isEmpty()) {
-        const ChartTheme &theme = m_model->theme();
-        QFontMetrics fm(theme.legendFont);
-        const int swatchW = 14, gap = 6, pad = 8;
-        int maxItemW = 0;
-        for (Series *s : vis)
-            maxItemW = qMax(maxItemW, swatchW + gap + fm.width(s->name()));
-        outsideLegendH = fm.height() + pad * 2 + 4;  // 4px 与下方间距
+    if (m_legend.position == Legend::AboveChart && !vis.isEmpty()) {
+        QFontMetrics fm(m_legend.font);
+        const int swatchH = 10, pad = 8;
+        int rowH = qMax(fm.height(), swatchH) + 4;
+        int legendH;
+        if (m_legend.orientation == Legend::Horizontal) {
+            legendH = rowH + pad * 2;
+        } else {
+            legendH = vis.size() * rowH + (vis.size() - 1) * 2 + pad * 2;
+        }
+        outsideLegendH = legendH + 4;  // 与 plotArea 的间距
     }
     m_layout->setOutsideLegendHeight(outsideLegendH);
 
@@ -1267,52 +1208,8 @@ void ChartWidget::rebuildBuffer()
     m_layout->recalculate(width(), height());
     m_renderer->render(p, width(), height());
 
-    // ===== 新增：在图表上方绘制外部图例 =====
-    if (m_legendPosition == LegendPosition::OutsideTop && !vis.isEmpty()) {
-        const ChartTheme &theme = m_model->theme();
-        p.setFont(theme.legendFont);
-        QFontMetrics fm(theme.legendFont);
+    m_renderer->drawLegend(p, m_layout->plotArea(), vis, m_legend);
 
-        const int swatchW = 14, swatchH = 10, gap = 6, itemGap = 14, pad = 8;
-        int rowH = qMax(fm.height(), swatchH) + 4;
-
-        // 计算图例总宽度
-        int totalW = 0;
-        for (Series *s : vis) totalW += swatchW + gap + fm.width(s->name());
-        if (vis.size() > 1) totalW += (vis.size() - 1) * itemGap;
-        int legendW = totalW + pad * 2;
-        int legendH = rowH + pad * 2;
-
-        // 水平居中，位于标题下方、绘图区域上方
-        QRectF pa = m_layout->plotArea();
-        double lx = pa.left() + (pa.width() - legendW) / 2.0;
-        double ly = pa.top() - outsideLegendH;
-
-        QRectF lr(lx, ly, legendW, legendH);
-        p.setPen(QPen(theme.legendBorder, 1));
-        p.setBrush(theme.legendBackground);
-        p.drawRoundedRect(lr, theme.legendRadius, theme.legendRadius);
-
-        double cx = lx + pad, cy = ly + pad;
-        for (Series *s : vis) {
-            QRectF sw(cx, cy + (rowH - swatchH) / 2.0, swatchW, swatchH);
-            p.fillRect(sw, s->color());
-            p.setPen(s->color().darker(130));
-            p.setBrush(Qt::NoBrush);
-            p.drawRect(sw);
-            p.setPen(theme.textColor);
-            p.drawText(QPointF(cx + swatchW + gap, cy + fm.ascent() + (rowH - fm.height()) / 2.0 - 1), s->name());
-            cx += swatchW + gap + fm.width(s->name()) + itemGap;
-        }
-    }
-
-    // ===== 修改：内部图例 — OutsideTop 时不绘制 =====
-    if (m_legendPosition != LegendPosition::OutsideTop) {
-        m_renderer->drawLegend(p, m_layout->plotArea(), vis,
-                               int(m_legendPosition), int(m_legendOrientation));
-    }
-
-    // 工具提示（不变）
     if (m_showTooltip) {
         ChartRenderer::TooltipData tip;
         tip.visible = true; tip.position = m_tooltipPos;
@@ -1321,7 +1218,6 @@ void ChartWidget::rebuildBuffer()
     }
     m_bufferDirty = false;
 }
-
 
 // ---- 鼠标交互 ----
 
@@ -1401,14 +1297,14 @@ void ChartWidget::contextMenuEvent(QContextMenuEvent *e)
     };
 
     QMenu *legM = menu.addMenu("Legend");
-    QAction *aTR = addCheck(legM, "Top Right", m_legendPosition==LegendPosition::TopRight);
-    QAction *aTP = addCheck(legM, "Top",       m_legendPosition==LegendPosition::Top);
-    QAction *aBT = addCheck(legM, "Bottom",    m_legendPosition==LegendPosition::Bottom);
-    QAction *aOT = addCheck(legM, "Above Chart",    m_legendPosition==LegendPosition::OutsideTop);  // 新增
-    QAction *aHD = addCheck(legM, "Hidden",    m_legendPosition==LegendPosition::Hidden);
+    QAction *aTR = addCheck(legM, "Top Right", m_legend.position==Legend::TopRight);
+    QAction *aTP = addCheck(legM, "Top",       m_legend.position==Legend::Top);
+    QAction *aBT = addCheck(legM, "Bottom",    m_legend.position==Legend::Bottom);
+    QAction *aOT = addCheck(legM, "Above Chart", m_legend.position==Legend::AboveChart);
+    QAction *aHD = addCheck(legM, "Hidden",    m_legend.position==Legend::Hidden);
     QMenu *oriM = menu.addMenu("Layout");
-    QAction *aH = addCheck(oriM, "Horizontal", m_legendOrientation==LegendOrientation::Horizontal);
-    QAction *aV = addCheck(oriM, "Vertical",   m_legendOrientation==LegendOrientation::Vertical);
+    QAction *aH = addCheck(oriM, "Horizontal", m_legend.orientation==Legend::Horizontal);
+    QAction *aV = addCheck(oriM, "Vertical",   m_legend.orientation==Legend::Vertical);
     menu.addSeparator();
     QMenu *grM = menu.addMenu("Grid");
     QAction *aYG = addCheck(grM, "Horizontal (Y)", ay && ay->isGridVisible() && ay->isHorizontalGridVisible());
@@ -1419,13 +1315,13 @@ void ChartWidget::contextMenuEvent(QContextMenuEvent *e)
 
     QAction *ch = menu.exec(e->globalPos());
     if (!ch) return;
-    if      (ch==aTR) setLegendPosition(LegendPosition::TopRight);
-    else if (ch==aTP) setLegendPosition(LegendPosition::Top);
-    else if (ch==aBT) setLegendPosition(LegendPosition::Bottom);
-    else if (ch==aOT) setLegendPosition(LegendPosition::OutsideTop);  // 新增
-    else if (ch==aHD) setLegendPosition(LegendPosition::Hidden);
-    else if (ch==aH)  setLegendOrientation(LegendOrientation::Horizontal);
-    else if (ch==aV)  setLegendOrientation(LegendOrientation::Vertical);
+    if      (ch==aTR) setLegendPosition(Legend::TopRight);
+    else if (ch==aTP) setLegendPosition(Legend::Top);
+    else if (ch==aBT) setLegendPosition(Legend::Bottom);
+    else if (ch==aOT) setLegendPosition(Legend::AboveChart);
+    else if (ch==aHD) setLegendPosition(Legend::Hidden);
+    else if (ch==aH)  setLegendOrientation(Legend::Horizontal);
+    else if (ch==aV)  setLegendOrientation(Legend::Vertical);
     else if (ch==aYG && ay) { bool on=!ay->isHorizontalGridVisible(); ay->setGridVisible(on); ay->setHorizontalGridVisible(on); markDirty(); }
     else if (ch==aXG && ax) { bool on=!ax->isVerticalGridVisible(); ax->setGridVisible(on); ax->setVerticalGridVisible(on); markDirty(); }
 }
@@ -1453,7 +1349,6 @@ void ChartWidget::findNearest(QPoint mousePos)
         for (int c = 0; c < cats.size(); ++c) {
             double cx = pa.left() + (double(c)+0.5)*catWidth;
             if (qAbs(mousePos.x()-cx) >= catWidth*0.45) continue;
-            // stacked bar
             for (Series *s : m_model->seriesList()) {
                 if (!s->isVisible() || s->type()!=SeriesType::StackedBar) continue;
                 if (c < static_cast<StackedBarSeries*>(s)->dataCount()) {
@@ -1461,7 +1356,6 @@ void ChartWidget::findNearest(QPoint mousePos)
                     if (d < bestDist) { bestDist=d; bestCat=c; bestSeries=s; bestBar=-2; bestPt=-1; }
                 }
             }
-            // bar
             QList<BarSeries*> bars;
             for (Series *s : m_model->seriesList())
                 if (s->isVisible() && s->type()==SeriesType::Bar && !static_cast<BarSeries*>(s)->useXY())
@@ -1485,7 +1379,6 @@ void ChartWidget::findNearest(QPoint mousePos)
         }
     }
 
-    // line
     for (Series *s : m_model->seriesList()) {
         if (!s->isVisible() || s->type()!=SeriesType::Line) continue;
         auto *ls = static_cast<LineSeries*>(s);
@@ -1495,7 +1388,6 @@ void ChartWidget::findNearest(QPoint mousePos)
         }
     }
 
-    // xy bar
     for (Series *s : m_model->seriesList()) {
         if (!s->isVisible() || s->type()!=SeriesType::Bar) continue;
         auto *bs = static_cast<BarSeries*>(s);
