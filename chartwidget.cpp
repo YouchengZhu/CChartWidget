@@ -1,1464 +1,1221 @@
-#include "ChartWidget.h"
-
-#include <QPainter>
-#include <QPaintEvent>
+#include "chartwidget.h"
 #include <QMouseEvent>
 #include <QWheelEvent>
-#include <QContextMenuEvent>
-#include <QMenu>
-#include <QFontMetrics>
-#include <QStandardPaths>
+#include <QResizeEvent>
+#include <QPainterPath>
+#include <QLineF>
+#include <QPolygon>
 #include <QtMath>
 #include <algorithm>
-#include <cmath>
-#include <limits>
 
-static constexpr double kPi = 3.14159265358979323846;
-static constexpr double kMarginRatio = 0.08;
+// ------------------------------------------------------------------------
+// Color palette for series
+// ------------------------------------------------------------------------
+static const QColor kDefaultPalette[] = {
+    QColor( 54, 162, 235),   // blue
+    QColor(255,  99, 132),   // red
+    QColor( 75, 192, 192),   // green
+    QColor(255, 159,  64),   // orange
+    QColor(153, 102, 255),   // purple
+    QColor(255, 205,  86),   // yellow
+    QColor(201, 203, 207),   // grey
+    QColor( 34, 198, 129),   // teal
+};
+static const int kPaletteSize = sizeof(kDefaultPalette) / sizeof(kDefaultPalette[0]);
+static int s_colorIndex = 0;
 
-// ========================================================================
-//  Axis  µœ÷
-// ========================================================================
-
-Axis::Axis(AxisPosition pos) : m_position(pos) {}
-Axis::~Axis() {}
-
-AxisPosition Axis::position() const { return m_position; }
-AxisType     Axis::type() const { return m_type; }
-void Axis::setType(AxisType t) { m_type = t; }
-
-void Axis::setRange(double lo, double hi) { m_autoRange = false; m_min = lo; m_max = hi; }
-void Axis::setAutoRange(bool on) { m_autoRange = on; }
-bool Axis::isAutoRange() const { return m_autoRange; }
-double Axis::min() const { return m_min; }
-double Axis::max() const { return m_max; }
-
-void    Axis::setTitle(const QString &t) { m_title = t; }
-QString Axis::title() const { return m_title; }
-void  Axis::setLabelFont(const QFont &f) { m_labelFont = f; }
-QFont Axis::labelFont() const { return m_labelFont; }
-void  Axis::setTitleFont(const QFont &f) { m_titleFont = f; }
-QFont Axis::titleFont() const { return m_titleFont; }
-void  Axis::setTitleColor(const QColor &c) { m_titleColor = c; }
-QColor Axis::titleColor() const { return m_titleColor; }
-
-void Axis::setTickCount(int n) { m_tickCount = qMax(2, n); }
-int  Axis::tickCount() const { return m_tickCount; }
-void Axis::setTicksVisible(bool on) { m_ticksVisible = on; }
-bool Axis::isTicksVisible() const { return m_ticksVisible; }
-void    Axis::setTickColor(const QColor &c) { m_tickColor = c; }
-QColor  Axis::tickColor() const { return m_tickColor; }
-void Axis::setTickDirection(TickDirection d) { m_tickDirection = d; }
-TickDirection Axis::tickDirection() const { return m_tickDirection; }
-
-void Axis::setSubTickCount(int n) { m_subTickCount = qMax(0, n); }
-int  Axis::subTickCount() const { return m_subTickCount; }
-void Axis::setSubTicksVisible(bool on) { m_subTicksVisible = on; }
-bool Axis::isSubTicksVisible() const { return m_subTicksVisible; }
-void    Axis::setSubTickColor(const QColor &c) { m_subTickColor = c; }
-QColor  Axis::subTickColor() const { return m_subTickColor; }
-void Axis::setSubTickDirection(TickDirection d) { m_subTickDirection = d; }
-TickDirection Axis::subTickDirection() const { return m_subTickDirection; }
-
-void Axis::setGridVisible(bool on) { m_gridVisible = on; }
-bool Axis::isGridVisible() const { return m_gridVisible; }
-void Axis::setHorizontalGridVisible(bool on) { m_horizontalGridVisible = on; }
-bool Axis::isHorizontalGridVisible() const { return m_horizontalGridVisible; }
-void Axis::setVerticalGridVisible(bool on) { m_verticalGridVisible = on; }
-bool Axis::isVerticalGridVisible() const { return m_verticalGridVisible; }
-void    Axis::setGridColor(const QColor &c) { m_gridColor = c; }
-QColor  Axis::gridColor() const { return m_gridColor; }
-void    Axis::setGridStyle(Qt::PenStyle s) { m_gridStyle = s; }
-Qt::PenStyle Axis::gridStyle() const { return m_gridStyle; }
-void    Axis::setGridWidth(int w) { m_gridWidth = qMax(1, w); }
-int     Axis::gridWidth() const { return m_gridWidth; }
-
-void Axis::setNotation(NumericNotation n) { m_notation = n; }
-NumericNotation Axis::notation() const { return m_notation; }
-void Axis::setFormatPrecision(int p) { m_precision = p; }
-int  Axis::formatPrecision() const { return m_precision; }
-
-void Axis::setDateTimeFormat(DateTimeFormat f) { m_dateTimeFmt = f; }
-DateTimeFormat Axis::dateTimeFormat() const { return m_dateTimeFmt; }
-void Axis::setDateFormat(DateFormat f) { m_dateFmt = f; }
-DateFormat Axis::dateFormat() const { return m_dateFmt; }
-
-// ========================================================================
-//  Series  µœ÷
-// ========================================================================
-
-Series::Series(const QString &name, SeriesType type)
-    : m_name(name), m_type(type) {}
-Series::~Series() {}
-
-QString    Series::name() const { return m_name; }
-SeriesType Series::type() const { return m_type; }
-void Series::setVisible(bool on) { m_visible = on; }
-bool Series::isVisible() const { return m_visible; }
-void   Series::setColor(const QColor &c) { m_color = c; }
-QColor Series::color() const { return m_color; }
-
-LineSeries::LineSeries(const QString &name) : Series(name, SeriesType::Line) {}
-void LineSeries::append(double x, double y) { m_data.append(DataPoint(x, y)); }
-void LineSeries::append(const QDateTime &tx, double y) { m_data.append(DataPoint(tx, y)); }
-void LineSeries::append(const DataPoint &p) { m_data.append(p); }
-void LineSeries::append(const QVector<DataPoint> &pts) { m_data.append(pts); }
-void LineSeries::removeAt(int i) { if (i >= 0 && i < m_data.size()) m_data.removeAt(i); }
-void LineSeries::removeBefore(int count) {
-    int n = qMin(count, m_data.size());
-    if (n > 0) m_data.erase(m_data.begin(), m_data.begin() + n);
+static QColor nextColor() {
+    return kDefaultPalette[s_colorIndex++ % kPaletteSize];
 }
-void LineSeries::keepLast(int maxCount) {
-    if (m_data.size() > maxCount)
-        m_data.erase(m_data.begin(), m_data.begin() + m_data.size() - maxCount);
-}
-void LineSeries::clear() { m_data.clear(); }
-const QVector<DataPoint>& LineSeries::data() const { return m_data; }
-int LineSeries::dataCount() const { return m_data.size(); }
-void   LineSeries::setLineWidth(double w) { m_lineWidth = w; }
-double LineSeries::lineWidth() const { return m_lineWidth; }
-void   LineSeries::setMarkerSize(double s) { m_markerSize = s; }
-double LineSeries::markerSize() const { return m_markerSize; }
-void         LineSeries::setScatterStyle(ScatterStyle s) { m_scatterStyle = s; }
-ScatterStyle LineSeries::scatterStyle() const { return m_scatterStyle; }
-void   LineSeries::setFillBrush(const QBrush &b) { m_fillBrush = b; }
-QBrush LineSeries::fillBrush() const { return m_fillBrush; }
-void   LineSeries::setFillEnabled(bool on) { m_fillEnabled = on; }
-bool   LineSeries::isFillEnabled() const { return m_fillEnabled; }
-void   LineSeries::setPixmap(const QPixmap &pm) { m_pixmap = pm; }
-QPixmap LineSeries::pixmap() const { return m_pixmap; }
 
-BarSeries::BarSeries(const QString &name) : Series(name, SeriesType::Bar) {}
-void BarSeries::append(double v) { m_data.append(v); m_useXY = false; }
-void BarSeries::appendXY(double x, double y) { m_xyData.append({x, y}); m_useXY = true; }
-void BarSeries::removeAt(int i) {
-    if (m_useXY) { if (i>=0 && i<m_xyData.size()) m_xyData.removeAt(i); }
-    else         { if (i>=0 && i<m_data.size())   m_data.removeAt(i); }
-}
-void BarSeries::clear() { m_data.clear(); m_xyData.clear(); }
-const QVector<double>& BarSeries::data() const { return m_data; }
-const QVector<BarSeries::XY>& BarSeries::xyData() const { return m_xyData; }
-bool BarSeries::useXY() const { return m_useXY; }
-int  BarSeries::dataCount() const { return m_useXY ? m_xyData.size() : m_data.size(); }
-void   BarSeries::setBarWidthRatio(double r) { m_barWidthRatio = qBound(0.1, r, 1.0); }
-double BarSeries::barWidthRatio() const { return m_barWidthRatio; }
-
-StackedBarSeries::StackedBarSeries(const QString &name)
-    : Series(name, SeriesType::StackedBar) {}
-void StackedBarSeries::append(double v) { m_data.append(v); }
-void StackedBarSeries::removeAt(int i) { if (i>=0 && i<m_data.size()) m_data.removeAt(i); }
-void StackedBarSeries::clear() { m_data.clear(); }
-const QVector<double>& StackedBarSeries::data() const { return m_data; }
-int StackedBarSeries::dataCount() const { return m_data.size(); }
-void   StackedBarSeries::setBarWidthRatio(double r) { m_barWidthRatio = qBound(0.1, r, 1.0); }
-double StackedBarSeries::barWidthRatio() const { return m_barWidthRatio; }
-
-// ========================================================================
-//  ChartModel  µœ÷
-// ========================================================================
-
-ChartModel::ChartModel(QObject *parent) : QObject(parent) {}
-ChartModel::~ChartModel()
+// ------------------------------------------------------------------------
+// Series
+// ------------------------------------------------------------------------
+Series::Series(const QString &name, QObject *parent)
+    : QObject(parent), m_name(name), m_color(nextColor())
 {
-    qDeleteAll(m_series);
-    m_series.clear();
-    delete m_axisX; m_axisX = nullptr;
-    delete m_axisY; m_axisY = nullptr;
 }
 
-void ChartModel::addAxis(Axis *axis)
-{
-    if (!axis) return;
-    if (axis->position() == AxisPosition::Bottom) {
-        delete m_axisX; m_axisX = axis;
+Series::~Series() = default;
+
+void Series::setName(const QString &name) { m_name = name; }
+void Series::setColor(const QColor &c) { m_color = c; emit dataChanged(); }
+void Series::setVisible(bool v) { m_visible = v; emit dataChanged(); }
+
+// ------------------------------------------------------------------------
+// LineSeries
+// ------------------------------------------------------------------------
+LineSeries::LineSeries(const QString &name, QObject *parent)
+    : Series(name, parent) {}
+
+void LineSeries::append(double key, double value) {
+    m_data.append({key, value});
+    emit dataChanged();
+}
+
+void LineSeries::append(const QDateTime &time, double value) {
+    append(time.toSecsSinceEpoch(), value);
+}
+
+void LineSeries::removeAt(int index) {
+    if (index >= 0 && index < m_data.size()) {
+        m_data.removeAt(index);
+        emit dataChanged();
+    }
+}
+
+// ------------------------------------------------------------------------
+// BarSeries
+// ------------------------------------------------------------------------
+BarSeries::BarSeries(const QString &name, QObject *parent)
+    : Series(name, parent) {}
+
+void BarSeries::setValue(int index, double value) {
+    if (index >= 0 && index < m_values.size()) {
+        m_values[index] = value;
+        emit dataChanged();
+    }
+}
+
+// ------------------------------------------------------------------------
+// StackedBarSeries
+// ------------------------------------------------------------------------
+StackedBarSeries::StackedBarSeries(const QString &name, QObject *parent)
+    : Series(name, parent) {}
+
+void StackedBarSeries::setValue(int index, double value) {
+    if (index >= 0 && index < m_values.size()) {
+        m_values[index] = value;
+        emit dataChanged();
+    }
+}
+
+// ------------------------------------------------------------------------
+// Axis
+// ------------------------------------------------------------------------
+Axis::Axis(bool vertical, QObject *parent)
+    : QObject(parent), m_vertical(vertical) {}
+
+void Axis::setRange(double min, double max) {
+    if (qFuzzyCompare(min, max))
+        max = min + 1.0;
+    m_min = qMin(min, max);
+    m_max = qMax(min, max);
+    recalculateTicks();
+    emit rangeChanged();
+}
+
+double Axis::coordToPixel(double value) const {
+    if (qFuzzyCompare(m_max, m_min))
+        return m_rect.left();
+    double ratio = (value - m_min) / (m_max - m_min);
+    if (m_vertical) {
+        // Y axis: data min ‚Üí bottom of rect, data max ‚Üí top of rect
+        return m_rect.bottom() - ratio * m_rect.height();
     } else {
-        delete m_axisY; m_axisY = axis;
+        return m_rect.left() + ratio * m_rect.width();
     }
-    emit axisAdded(axis);
-    emit dataChanged();
 }
 
-void ChartModel::removeAxis(Axis *axis)
-{
-    if (axis == m_axisX) m_axisX = nullptr;
-    if (axis == m_axisY) m_axisY = nullptr;
-    emit axisRemoved(axis);
-    emit dataChanged();
-}
-
-QList<Axis*> ChartModel::axes() const {
-    QList<Axis*> a;
-    if (m_axisX) a << m_axisX;
-    if (m_axisY) a << m_axisY;
-    return a;
-}
-Axis* ChartModel::axisX() const { return m_axisX; }
-Axis* ChartModel::axisY() const { return m_axisY; }
-
-void ChartModel::addSeries(Series *s)
-{
-    if (!s) return;
-    if (!s->color().isValid()) s->setColor(nextColor());
-    m_series.append(s);
-    emit seriesAdded(s);
-    emit dataChanged();
-}
-
-void ChartModel::removeSeries(Series *s)
-{
-    if (m_series.removeOne(s)) { emit seriesRemoved(s); emit dataChanged(); }
-}
-
-QList<Series*> ChartModel::seriesList() const { return m_series; }
-
-void ChartModel::setCategories(const QStringList &c)
-{ m_categories = c; emit categoriesChanged(); emit dataChanged(); }
-QStringList ChartModel::categories() const { return m_categories; }
-
-void ChartModel::setTitle(const QString &t)
-{ m_title = t; emit titleChanged(); emit dataChanged(); }
-QString ChartModel::title() const { return m_title; }
-
-void ChartModel::setTheme(const ChartTheme &theme)
-{ m_theme = theme; emit themeChanged(); emit dataChanged(); }
-ChartTheme ChartModel::theme() const { return m_theme; }
-
-QColor ChartModel::nextColor()
-{
-    const auto &pal = m_theme.seriesColors;
-    if (pal.isEmpty()) return QColor(128, 128, 128);
-    m_colorIndex = (m_colorIndex + 1) % pal.size();
-    return pal[(m_colorIndex - 1 + pal.size()) % pal.size()];
-}
-
-// ========================================================================
-//  ChartLayout  µœ÷
-// ========================================================================
-
-ChartLayout::ChartLayout(ChartModel *model, QObject *parent)
-    : QObject(parent), m_model(model)
-{
-    connect(m_model, &ChartModel::dataChanged, this, &ChartLayout::invalidate);
-}
-
-void ChartLayout::setOutsideLegendHeight(double h) { m_outsideLegendHeight = h; }
-void ChartLayout::invalidate() { m_dirty = true; }
-QRectF ChartLayout::plotArea() const { return m_plotArea; }
-double ChartLayout::xMin() const { return m_xMin; }
-double ChartLayout::xMax() const { return m_xMax; }
-double ChartLayout::yMin() const { return m_yMin; }
-double ChartLayout::yMax() const { return m_yMax; }
-QVector<double> ChartLayout::xTicks() const { return m_xTicks; }
-QVector<double> ChartLayout::yTicks() const { return m_yTicks; }
-
-void ChartLayout::recalculate(int w, int h)
-{
-    if (!m_dirty) return;
-    computeXRange();
-    computeYRange();
-    computeTicks();
-    computeLayout(w, h);
-    m_dirty = false;
-}
-
-void ChartLayout::computeXRange()
-{
-    Axis *ax = m_model->axisX();
-    if (!ax) return;
-    if (!ax->isAutoRange()) { m_xMin = ax->min(); m_xMax = ax->max(); return; }
-
-    QStringList cats = m_model->categories();
-    if (!cats.isEmpty()) {
-        m_xMin = 0; m_xMax = qMax(1, cats.size() - 1);
-        ax->setRange(m_xMin, m_xMax); return;
+double Axis::pixelToCoord(double pixel) const {
+    if (qFuzzyCompare(m_max, m_min))
+        return m_min;
+    double ratio;
+    if (m_vertical) {
+        ratio = (m_rect.bottom() - pixel) / m_rect.height();
+    } else {
+        ratio = (pixel - m_rect.left()) / m_rect.width();
     }
+    return m_min + ratio * (m_max - m_min);
+}
 
-    double lo = std::numeric_limits<double>::max();
-    double hi = -lo;
-    bool found = false;
+void Axis::recalculateTicks() {
+    m_ticks.clear();
+    m_subTicks.clear();
+    m_tickLabels.clear();
 
-    for (Series *s : m_model->seriesList()) {
-        if (!s->isVisible()) continue;
-        if (s->type() == SeriesType::Line) {
-            for (const auto &pt : static_cast<LineSeries*>(s)->data()) {
-                lo = qMin(lo, pt.x); hi = qMax(hi, pt.x); found = true;
-            }
-        } else if (s->type() == SeriesType::Bar) {
-            auto *bs = static_cast<BarSeries*>(s);
-            if (bs->useXY()) {
-                for (const auto &xy : bs->xyData()) {
-                    lo = qMin(lo, xy.x); hi = qMax(hi, xy.x); found = true;
-                }
-            }
+    double range = m_max - m_min;
+    if (range <= 0 || m_tickCount < 2) return;
+
+    if (m_type == AxisType::Date) {
+        // Date axis: nice time intervals
+        double step;
+        if (range < 300)            step = 30;         // 30 sec
+        else if (range < 1800)      step = 300;        // 5 min
+        else if (range < 7200)      step = 1800;       // 30 min
+        else if (range < 43200)     step = 7200;       // 2 hr
+        else if (range < 172800)    step = 43200;      // 12 hr
+        else if (range < 604800)    step = 86400;      // 1 day
+        else if (range < 2592000)   step = 604800;     // 1 week
+        else if (range < 31536000)  step = 2592000;    // ~1 month
+        else                        step = 31536000;   // ~1 year
+
+        double start = ceil(m_min / step) * step;
+        if (start - step > m_min) start -= step;
+        for (double t = start; t <= m_max; t += step)
+            m_ticks.append(t);
+
+        // Sub-ticks: divide step into m_subTickCount+1 parts
+        double subStep = step / (m_subTickCount + 1);
+        for (double t = m_min - std::fmod(m_min, step) + subStep; t < m_max; t += subStep) {
+            if (t > m_min)
+                m_subTicks.append(t);
         }
-    }
-    if (!found) { lo = 0; hi = 100; }
-    if (qFuzzyCompare(lo, hi)) { lo -= 1; hi += 1; }
-    ax->setRange(lo, hi);
-    m_xMin = lo; m_xMax = hi;
-}
+    } else {
+        // Numeric axis: nice-number algorithm
+        double roughStep = range / qMax(m_tickCount - 1, 1);
+        double magnitude = std::pow(10.0, std::floor(std::log10(roughStep)));
+        double normalized = roughStep / magnitude;
+        double niceStep;
+        if (normalized < 1.5)      niceStep = 1.0;
+        else if (normalized < 3.5) niceStep = 2.0;
+        else if (normalized < 7.5) niceStep = 5.0;
+        else                       niceStep = 10.0;
+        niceStep *= magnitude;
 
-void ChartLayout::computeYRange()
-{
-    Axis *ay = m_model->axisY();
-    if (!ay) return;
-    if (!ay->isAutoRange()) { m_yMin = ay->min(); m_yMax = ay->max(); return; }
+        double start = std::ceil(m_min / niceStep) * niceStep;
+        for (double t = start; t <= m_max + niceStep * 0.001; t += niceStep)
+            m_ticks.append(t);
 
-    double lo = std::numeric_limits<double>::max();
-    double hi = -lo;
-    bool found = false;
-
-    for (Series *s : m_model->seriesList()) {
-        if (!s->isVisible()) continue;
-        if (s->type() == SeriesType::Line) {
-            for (const auto &pt : static_cast<LineSeries*>(s)->data()) {
-                lo = qMin(lo, pt.y); hi = qMax(hi, pt.y); found = true;
-            }
-        } else if (s->type() == SeriesType::Bar) {
-            auto *bs = static_cast<BarSeries*>(s);
-            if (bs->useXY()) {
-                for (const auto &xy : bs->xyData()) {
-                    lo = qMin(lo, xy.y); hi = qMax(hi, xy.y); found = true;
-                }
-            } else {
-                for (double v : bs->data()) { lo = qMin(lo, v); hi = qMax(hi, v); found = true; }
+        // Sub-ticks
+        double subStep = niceStep / (m_subTickCount + 1);
+        if (subStep > 0) {
+            for (double t = start - niceStep + subStep; t <= m_max; t += subStep) {
+                if (t > m_min)
+                    m_subTicks.append(t);
             }
         }
     }
 
-    QList<StackedBarSeries*> stacked;
-    for (Series *s : m_model->seriesList()) {
-        if (s->isVisible() && s->type() == SeriesType::StackedBar)
-            stacked.append(static_cast<StackedBarSeries*>(s));
-    }
-    if (!stacked.isEmpty()) {
-        int maxCat = 0;
-        for (auto *sb : stacked) maxCat = qMax(maxCat, sb->dataCount());
-        for (int i = 0; i < maxCat; ++i) {
-            double sp = 0, sn = 0;
-            for (auto *sb : stacked) {
-                if (i < sb->dataCount()) {
-                    double v = sb->data().at(i);
-                    if (v >= 0) sp += v; else sn += v;
-                }
-            }
-            lo = qMin(lo, qMin(0.0, sn));
-            hi = qMax(hi, qMax(0.0, sp));
-            found = true;
+    // Generate labels
+    for (double t : m_ticks)
+        m_tickLabels.append(tickLabelText(t));
+}
+
+QString Axis::tickLabelText(double value) const {
+    if (m_type == AxisType::Date) {
+        QDateTime dt = QDateTime::fromSecsSinceEpoch(qint64(value));
+        switch (m_dateFormat) {
+        case DateFormat::MMdd:     return dt.toString("MM-dd");
+        case DateFormat::HHmm:     return dt.toString("HH:mm");
+        case DateFormat::MMddHHmm: return dt.toString("MM-dd HH:mm");
         }
     }
-
-    if (!found) { lo = 0; hi = 100; }
-    if (qFuzzyCompare(lo, hi)) hi += 1;
-    double margin = (hi - lo) * kMarginRatio;
-    lo -= margin; hi += margin;
-    if (lo > 0) lo = 0;
-    ay->setRange(lo, hi);
-    m_yMin = lo; m_yMax = hi;
-}
-
-void ChartLayout::computeTicks()
-{
-    Axis *ax = m_model->axisX();
-    Axis *ay = m_model->axisY();
-    if (ay) m_yTicks = computeNumericTicks(ay);
-
-    QStringList cats = m_model->categories();
-    if (!cats.isEmpty()) {
-        m_xTicks.clear();
-        for (int i = 0; i < cats.size(); ++i) m_xTicks.append(double(i));
-    } else if (ax) {
-        switch (ax->type()) {
-        case AxisType::Numeric:  m_xTicks = computeNumericTicks(ax);   break;
-        case AxisType::DateTime: m_xTicks = computeDateTimeTicks(ax);  break;
-        case AxisType::Date:     m_xTicks = computeDateTicks(ax);      break;
-        }
-    }
-}
-
-QVector<double> ChartLayout::computeNumericTicks(Axis *axis) const
-{
-    QVector<double> ticks;
-    double range = axis->max() - axis->min();
-    if (range <= 0) return ticks;
-    double step = niceStep(range, axis->tickCount());
-    double v = std::ceil(axis->min() / step) * step;
-    double eps = step * 1e-6;
-    while (v <= axis->max() + eps) {
-        if (v >= axis->min() - eps) ticks.append(v);
-        v += step;
-    }
-    return ticks;
-}
-
-QVector<double> ChartLayout::computeDateTimeTicks(Axis *axis) const
-{
-    QVector<double> ticks;
-    double range = axis->max() - axis->min();
-    if (range <= 0) return ticks;
-    static const qint64 intervals[] = {
-        1,2,5,10,15,30,60,120,300,600,900,1800,
-        3600,7200,14400,21600,43200,86400
-    };
-    int bestIdx = 17;
-    for (int i = 0; i < 18; ++i) {
-        if (range / double(intervals[i]) <= double(axis->tickCount()) * 1.5) { bestIdx = i; break; }
-    }
-    qint64 step = intervals[bestIdx];
-    qint64 lo = qint64(axis->min()), hi = qint64(axis->max());
-    qint64 start = (lo / step) * step;
-    if (start < lo) start += step;
-    for (qint64 t = start; t <= hi; t += step) ticks.append(double(t));
-    return ticks;
-}
-
-QVector<double> ChartLayout::computeDateTicks(Axis *axis) const
-{
-    QVector<double> ticks;
-    double range = axis->max() - axis->min();
-    if (range <= 0) return ticks;
-    qint64 days = qint64(range) / 86400;
-    int stepDays = (days<=14)?1 : (days<=60)?3 : (days<=180)?7 : (days<=730)?30 : 90;
-    qint64 stepSecs = qint64(stepDays) * 86400;
-    qint64 lo = qint64(axis->min()), hi = qint64(axis->max());
-    QDateTime startDt = QDateTime::fromSecsSinceEpoch(lo).date().startOfDay();
-    qint64 t = qint64(startDt.toSecsSinceEpoch());
-    if (t < lo) t += stepSecs;
-    while (t <= hi) { ticks.append(double(t)); t += stepSecs; }
-    return ticks;
-}
-
-void ChartLayout::computeLayout(int w, int h)
-{
-    Axis *ax = m_model->axisX();
-    Axis *ay = m_model->axisY();
-
-    QFontMetrics lfm(ay ? ay->labelFont() : QFont("Microsoft YaHei", 9));
-    QFontMetrics tfm(ax ? ax->titleFont() : QFont("Microsoft YaHei", 10, QFont::Bold));
-
-    double left = m_margin, top = m_margin, right = m_margin, bottom = m_margin;
-
-    if (m_outsideLegendHeight > 0) {
-        top += m_outsideLegendHeight;
-    }
-
-    if (!m_model->title().isEmpty()) {
-        QFontMetrics fm(m_model->theme().titleFont);
-        top += fm.height() + 4;
-    }
-    if (ay) {
-        double maxW = 0;
-        for (double v : m_yTicks)
-            maxW = qMax(maxW, double(lfm.width(formatAxisValue(ay, v))));
-        left += maxW + 10;
-        if (!ay->title().isEmpty()) left += tfm.height() + 4;
-    }
-    if (ax) {
-        bottom += lfm.height() + 8;
-        if (!ax->title().isEmpty()) bottom += tfm.height() + 4;
-    }
-    m_plotArea = QRectF(left, top, qMax(1.0, w-left-right), qMax(1.0, h-top-bottom));
-}
-
-QPointF ChartLayout::mapToPixel(double dx, double dy) const
-{
-    double xr = qFuzzyIsNull(m_xMax-m_xMin) ? 1.0 : m_xMax-m_xMin;
-    double yr = qFuzzyIsNull(m_yMax-m_yMin) ? 1.0 : m_yMax-m_yMin;
-    return QPointF(m_plotArea.left() + (dx-m_xMin)/xr*m_plotArea.width(),
-                   m_plotArea.bottom() - (dy-m_yMin)/yr*m_plotArea.height());
-}
-
-double ChartLayout::pixelXToData(double px) const {
-    double xr = m_xMax-m_xMin;
-    return qFuzzyIsNull(xr) ? m_xMin : m_xMin + (px-m_plotArea.left())/m_plotArea.width()*xr;
-}
-double ChartLayout::pixelYToData(double py) const {
-    double yr = m_yMax-m_yMin;
-    return qFuzzyIsNull(yr) ? m_yMin : m_yMin + (m_plotArea.bottom()-py)/m_plotArea.height()*yr;
-}
-
-QString ChartLayout::formatAxisValue(Axis *axis, double value) const
-{
-    if (!axis) return QString::number(value, 'f', 2);
-    if (axis->position() == AxisPosition::Bottom && !m_model->categories().isEmpty()) {
-        int idx = int(value + 0.5);
-        return m_model->categories().value(idx, QString::number(idx));
-    }
-    switch (axis->type()) {
-    case AxisType::Numeric:  return formatNumericValue(axis, value);
-    case AxisType::DateTime: return formatDateTimeValue(value, axis->dateTimeFormat());
-    case AxisType::Date:     return formatDateValue(value, axis->dateFormat());
-    }
+    // Numeric
     return QString::number(value, 'f', 2);
 }
 
-QString ChartLayout::formatNumericValue(Axis *axis, double v) const
-{
-    if (axis->notation() == NumericNotation::Scientific)
-        return QString::number(v, 'e', qMax(1, axis->formatPrecision()<0 ? 2 : axis->formatPrecision()));
-    int prec = axis->formatPrecision();
-    if (prec < 0) prec = decimalsForStep(niceStep(axis->max()-axis->min(), axis->tickCount()));
-    return QString::number(v, 'f', prec);
-}
-
-QString ChartLayout::formatDateTimeValue(double v, DateTimeFormat fmt) const
-{
-    QDateTime dt = QDateTime::fromSecsSinceEpoch(qint64(v));
-    switch (fmt) {
-    case DateTimeFormat::HHmmss:    return dt.toString("HH:mm:ss");
-    case DateTimeFormat::HHmm:      return dt.toString("HH:mm");
-    case DateTimeFormat::HHmmsszzz: return dt.toString("HH:mm:ss.zzz");
-    }
-    return dt.toString("HH:mm:ss");
-}
-
-QString ChartLayout::formatDateValue(double v, DateFormat fmt) const
-{
-    QDate d = QDateTime::fromSecsSinceEpoch(qint64(v)).date();
-    switch (fmt) {
-    case DateFormat::yyyyMMdd:   return d.toString("yyyy-MM-dd");
-    case DateFormat::yyyy_MM_dd: return d.toString("yyyy/MM/dd");
-    case DateFormat::MMdd:       return d.toString("MM-dd");
-    case DateFormat::yyyyMM:     return d.toString("yyyy-MM");
-    }
-    return d.toString("yyyy-MM-dd");
-}
-
-double ChartLayout::niceStep(double range, int tickCount)
-{
-    if (range <= 0 || tickCount < 2) return 1.0;
-    double rough = range / double(tickCount-1);
-    double mag = std::pow(10.0, std::floor(std::log10(rough)));
-    double norm = rough / mag;
-    double nice = (norm<1.5)?1.0 : (norm<3.5)?2.0 : (norm<7.5)?5.0 : 10.0;
-    return nice * mag;
-}
-
-int ChartLayout::decimalsForStep(double step)
-{
-    if (step >= 1.0) return 0;
-    int d = 0; double s = step;
-    while (s < 1.0 && d < 10) { s *= 10.0; ++d; }
-    return d;
-}
-
-// ========================================================================
-//  ChartRenderer  µœ÷
-// ========================================================================
-
-ChartRenderer::ChartRenderer(ChartModel *model, ChartLayout *layout)
-    : m_model(model), m_layout(layout) {}
-
-void ChartRenderer::render(QPainter &p, int w, int h)
-{
-    p.setRenderHint(QPainter::Antialiasing, true);
-    p.setRenderHint(QPainter::TextAntialiasing, true);
-    drawBackground(p, w, h);
-    drawPlotBackground(p);
-    drawGrid(p);
-    drawSeries(p);
-    drawAxes(p);
-    drawTitle(p);
-}
-
-void ChartRenderer::drawBackground(QPainter &p, int w, int h)
-{
-    p.fillRect(0, 0, w, h, m_model->theme().background);
-}
-
-void ChartRenderer::drawPlotBackground(QPainter &p)
-{
-    QRectF pa = m_layout->plotArea();
-    p.fillRect(pa, m_model->theme().plotBackground);
-    p.setPen(QPen(QColor(200,200,200), 1));
-    p.setBrush(Qt::NoBrush);
-    p.drawRect(pa);
-}
-
-void ChartRenderer::drawGrid(QPainter &p)
-{
-    Axis *ax = m_model->axisX(), *ay = m_model->axisY();
-    if (!ax || !ay) return;
-    QRectF pa = m_layout->plotArea();
-
-    if (ay->isGridVisible() && ay->isHorizontalGridVisible()) {
-        p.setPen(QPen(ay->gridColor(), ay->gridWidth(), ay->gridStyle()));
-        for (double v : m_layout->yTicks()) {
-            QPointF pt = m_layout->mapToPixel(m_layout->xMin(), v);
-            if (pt.y() >= pa.top() && pt.y() <= pa.bottom())
-                p.drawLine(QPointF(pa.left(), pt.y()), QPointF(pa.right(), pt.y()));
-        }
-    }
-    if (ax->isGridVisible() && ax->isVerticalGridVisible()) {
-        p.setPen(QPen(ax->gridColor(), ax->gridWidth(), ax->gridStyle()));
-        for (double v : m_layout->xTicks()) {
-            QPointF pt = m_layout->mapToPixel(v, m_layout->yMin());
-            if (pt.x() >= pa.left() && pt.x() <= pa.right())
-                p.drawLine(QPointF(pt.x(), pa.top()), QPointF(pt.x(), pa.bottom()));
-        }
-    }
-}
-
-void ChartRenderer::drawSeries(QPainter &p)
-{
-    drawStackedBar(p);
-    for (Series *s : m_model->seriesList()) {
-        if (s->isVisible() && s->type() == SeriesType::Bar)
-            drawBar(p, static_cast<BarSeries*>(s));
-    }
-    for (Series *s : m_model->seriesList()) {
-        if (s->isVisible() && s->type() == SeriesType::Line)
-            drawLine(p, static_cast<LineSeries*>(s));
-    }
-}
-
-void ChartRenderer::drawLine(QPainter &p, LineSeries *s)
-{
-    if (!s || s->dataCount() < 1) return;
-    const auto &data = s->data();
-    QRectF pa = m_layout->plotArea();
-    QPen pen(s->color(), s->lineWidth(), Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
-
-    p.save();
-    p.setClipRect(pa.adjusted(-1, -1, 1, 1));
-
-    if (s->isFillEnabled() && data.size() >= 2) {
-        QPolygonF fp;
-        for (const auto &pt : data)
-            fp << m_layout->mapToPixel(pt.x, pt.y);
-        fp << m_layout->mapToPixel(data.last().x, m_layout->yMin());
-        fp << m_layout->mapToPixel(data.first().x, m_layout->yMin());
-        fp << m_layout->mapToPixel(data.first().x, data.first().y);
-
-        QRectF polyBounds = fp.boundingRect();
-
-        QBrush originalBrush = s->fillBrush();
-        QBrush mappedBrush;
-
-        if (originalBrush.style() == Qt::LinearGradientPattern ||
-            originalBrush.style() == Qt::RadialGradientPattern ||
-            originalBrush.style() == Qt::ConicalGradientPattern) {
-
-            const QGradient *origGrad = originalBrush.gradient();
-            QLinearGradient mappedGrad(polyBounds.topLeft(), polyBounds.bottomLeft());
-            QGradientStops stops = origGrad->stops();
-            for (const auto &stop : stops) {
-                mappedGrad.setColorAt(stop.first, stop.second);
-            }
-            mappedGrad.setSpread(origGrad->spread());
-            mappedBrush = QBrush(mappedGrad);
+void Axis::drawGrid(QPainter *p) const {
+    p->save();
+    QPen gridPen(m_gridColor, 0.5);
+    p->setPen(gridPen);
+    QRectF gr = m_gridRect;
+    for (double t : m_ticks) {
+        if (m_vertical) {
+            double y = coordToPixel(t);
+            p->drawLine(QPointF(gr.left(), y), QPointF(gr.right(), y));
         } else {
-            mappedBrush = originalBrush;
-        }
-
-        p.setBrush(mappedBrush);
-        p.setPen(Qt::NoPen);
-        p.drawPolygon(fp);
-    }
-
-    if (data.size() >= 2) {
-        QPolygonF poly;
-        for (const auto &pt : data)
-            poly << m_layout->mapToPixel(pt.x, pt.y);
-        p.setPen(pen);
-        p.setBrush(Qt::NoBrush);
-        p.drawPolyline(poly);
-    }
-
-    ScatterStyle ss = s->scatterStyle();
-    double ms = s->markerSize();
-    if (ss != ScatterStyle::None && ms > 0) {
-        p.setPen(Qt::NoPen);
-        if (ss == ScatterStyle::CustomPixmap && !s->pixmap().isNull()) {
-            QPixmap pm = s->pixmap();
-            double scale = ms / 5.0;
-            QPixmap scaled = pm.scaled(int(pm.width() * scale),
-                                       int(pm.height() * scale),
-                                       Qt::KeepAspectRatio,
-                                       Qt::SmoothTransformation);
-            double hw = scaled.width() / 2.0;
-            double hh = scaled.height() / 2.0;
-            for (const auto &pt : data) {
-                QPointF pos = m_layout->mapToPixel(pt.x, pt.y);
-                p.drawPixmap(int(pos.x() - hw), int(pos.y() - hh), scaled);
-            }
-        } else {
-            for (const auto &pt : data)
-                drawScatter(p, ss, m_layout->mapToPixel(pt.x, pt.y), ms, s->color());
+            double x = coordToPixel(t);
+            p->drawLine(QPointF(x, gr.top()), QPointF(x, gr.bottom()));
         }
     }
-
-    p.restore();
+    p->restore();
 }
 
-void ChartRenderer::drawBar(QPainter &p, BarSeries *s)
-{
-    if (!s || s->dataCount() == 0) return;
-    QRectF pa = m_layout->plotArea();
-    p.save();
-    p.setClipRect(pa.adjusted(-1,-1,1,1));
+void Axis::drawSubGrid(QPainter *p) const {
+    p->save();
+    QPen subPen(QColor(m_gridColor.red(), m_gridColor.green(), m_gridColor.blue(), 100), 0.5);
+    p->setPen(subPen);
+    QRectF gr = m_gridRect;
+    for (double t : m_subTicks) {
+        if (m_vertical) {
+            double y = coordToPixel(t);
+            p->drawLine(QPointF(gr.left(), y), QPointF(gr.right(), y));
+        } else {
+            double x = coordToPixel(t);
+            p->drawLine(QPointF(x, gr.top()), QPointF(x, gr.bottom()));
+        }
+    }
+    p->restore();
+}
 
-    if (s->useXY()) {
-        double barW = pa.width() * 0.03 * s->barWidthRatio();
-        for (int i = 0; i < s->xyData().size(); ++i) {
-            const auto &xy = s->xyData().at(i);
-            QPointF top = m_layout->mapToPixel(xy.x, xy.y);
-            QPointF bot = m_layout->mapToPixel(xy.x, qMax(m_layout->yMin(), 0.0));
-            QRectF r(top.x()-barW/2.0, top.y(), barW, bot.y()-top.y());
-            p.fillRect(r, s->color());
-            p.setPen(s->color().darker(120));
-            p.drawRect(r);
+void Axis::drawAxis(QPainter *p) const {
+    p->save();
+    // Axis line
+    QPen axisPen(m_tickColor, 1.0);
+    p->setPen(axisPen);
+    if (m_vertical) {
+        p->drawLine(QPointF(m_rect.right(), m_rect.top()),
+                    QPointF(m_rect.right(), m_rect.bottom()));
+        // Tick marks (right side for left Y axis)
+        double tickLen = 5;
+        for (double t : m_ticks) {
+            double y = coordToPixel(t);
+            p->drawLine(QPointF(m_rect.right() - tickLen, y),
+                        QPointF(m_rect.right(), y));
+        }
+        // Sub-ticks
+        double subTickLen = 3;
+        QPen subPen(m_subTickColor, 1.0);
+        p->setPen(subPen);
+        for (double t : m_subTicks) {
+            double y = coordToPixel(t);
+            p->drawLine(QPointF(m_rect.right() - subTickLen, y),
+                        QPointF(m_rect.right(), y));
         }
     } else {
-        const auto &vals = s->data();
-        int nCat = m_model->categories().isEmpty() ? vals.size() : m_model->categories().size();
-        if (nCat == 0) { p.restore(); return; }
-
-        QList<BarSeries*> bars;
-        for (Series *ss : m_model->seriesList())
-            if (ss->isVisible() && ss->type() == SeriesType::Bar)
-                bars.append(static_cast<BarSeries*>(ss));
-        int totalBars = bars.size(), barIdx = qMax(0, bars.indexOf(s));
-        double catLeftPx  = m_layout->mapToPixel(-0.5, 0).x();
-        double catRightPx = m_layout->mapToPixel(0.5, 0).x();
-        double catWidthPx = catRightPx - catLeftPx;
-        double groupW  = catWidthPx * s->barWidthRatio();
-        double singleW = groupW / qMax(1, totalBars);
-
-        for (int i = 0; i < vals.size(); ++i) {
-            QPointF centerPt = m_layout->mapToPixel(double(i), 0);
-            double cx = centerPt.x();
-            if (cx < pa.left() - groupW || cx > pa.right() + groupW) continue;
-
-            double barLeft = cx - groupW / 2.0 + barIdx * singleW;
-            double yClamped = qBound(m_layout->yMin(), vals[i], m_layout->yMax());
-            QPointF topPt = m_layout->mapToPixel(0, vals[i]);
-            QPointF botPt = m_layout->mapToPixel(0, qMax(m_layout->yMin(), 0.0));
-            double barTop = qMin(topPt.y(), botPt.y());
-            double barH   = qAbs(botPt.y() - topPt.y());
-            if (barH < 1.0) barH = 1.0;
-
-            QRectF r(barLeft, barTop, singleW - 1, barH);
-            p.fillRect(r, s->color());
-            p.setPen(s->color().darker(120));
-            p.drawRect(r);
+        p->drawLine(QPointF(m_rect.left(), m_rect.top()),
+                    QPointF(m_rect.right(), m_rect.top()));
+        double tickLen = 5;
+        for (double t : m_ticks) {
+            double x = coordToPixel(t);
+            p->drawLine(QPointF(x, m_rect.top()),
+                        QPointF(x, m_rect.top() + tickLen));
+        }
+        double subTickLen = 3;
+        QPen subPen(m_subTickColor, 1.0);
+        p->setPen(subPen);
+        for (double t : m_subTicks) {
+            double x = coordToPixel(t);
+            p->drawLine(QPointF(x, m_rect.top()),
+                        QPointF(x, m_rect.top() + subTickLen));
         }
     }
-    p.restore();
+    p->restore();
 }
 
-void ChartRenderer::drawStackedBar(QPainter &p)
-{
-    QList<StackedBarSeries*> stacked;
-    for (Series *s : m_model->seriesList())
-        if (s->isVisible() && s->type() == SeriesType::StackedBar)
-            stacked.append(static_cast<StackedBarSeries*>(s));
-    if (stacked.isEmpty()) return;
-
-    int nCat = 0;
-    for (auto *sb : stacked) nCat = qMax(nCat, sb->dataCount());
-    if (nCat == 0) return;
-
-    QRectF pa = m_layout->plotArea();
-    double catLeftPx  = m_layout->mapToPixel(-0.5, 0).x();
-    double catRightPx = m_layout->mapToPixel(0.5, 0).x();
-    double catWidthPx = catRightPx - catLeftPx;
-    double barW = catWidthPx * stacked.first()->barWidthRatio();
-
-    p.save();
-    p.setClipRect(pa.adjusted(-1,-1,1,1));
-
-    for (int i = 0; i < nCat; ++i) {
-        QPointF centerPt = m_layout->mapToPixel(double(i), 0);
-        double cx = centerPt.x();
-        if (cx < pa.left() - barW || cx > pa.right() + barW) continue;
-
-        double barLeft = cx - barW / 2.0;
-        double cumNeg = 0, cumPos = 0;
-        for (auto *sb : stacked) {
-            double val = (i < sb->dataCount()) ? sb->data().at(i) : 0;
-            double bv, tv;
-            if (val >= 0) { bv = cumPos; tv = cumPos+val; cumPos = tv; }
-            else          { bv = cumNeg+val; tv = cumNeg; cumNeg = bv; }
-            QPointF tp = m_layout->mapToPixel(0, tv);
-            QPointF bp = m_layout->mapToPixel(0, bv);
-            QRectF r(barLeft, tp.y(), barW, bp.y()-tp.y());
-            p.fillRect(r, sb->color());
-            p.setPen(sb->color().darker(120));
-            p.drawRect(r);
+void Axis::drawLabels(QPainter *p) const {
+    p->save();
+    p->setPen(m_tickColor);
+    QFont labelFont("Arial", 8);
+    p->setFont(labelFont);
+    for (int i = 0; i < m_ticks.size(); ++i) {
+        const QString &text = m_tickLabels[i];
+        QFontMetrics fm(labelFont);
+        if (m_vertical) {
+            double y = coordToPixel(m_ticks[i]);
+            QRectF textRect(m_rect.left() - 5, y - fm.height() / 2.0,
+                            m_rect.width() - 5, fm.height());
+            p->drawText(textRect, Qt::AlignRight | Qt::AlignVCenter, text);
+        } else {
+            double x = coordToPixel(m_ticks[i]);
+            QRectF textRect(x - 40, m_rect.top() + 6, 80, fm.height());
+            p->drawText(textRect, Qt::AlignCenter, text);
         }
     }
-    p.restore();
+    p->restore();
 }
 
-void ChartRenderer::drawScatter(QPainter &p, ScatterStyle style,
-                                const QPointF &center, double size, const QColor &color)
-{
-    if (style == ScatterStyle::None || size <= 0) return;
-    const double s = size, cx = center.x(), cy = center.y();
-    p.setPen(Qt::NoPen); p.setBrush(color);
-
-    switch (style) {
-    case ScatterStyle::Circle:
-        p.drawEllipse(center, s, s);
-        p.setBrush(QColor(255,255,255));
-        p.drawEllipse(center, s*0.45, s*0.45);
-        break;
-    case ScatterStyle::Dot:
-        p.drawEllipse(center, s*0.6, s*0.6);
-        break;
-    case ScatterStyle::Square:
-        p.drawRect(QRectF(cx-s, cy-s, s*2, s*2));
-        p.setBrush(QColor(255,255,255));
-        p.drawRect(QRectF(cx-s*0.4, cy-s*0.4, s*0.8, s*0.8));
-        break;
-    case ScatterStyle::Diamond: {
-        QPolygonF poly;
-        poly << QPointF(cx, cy-s*1.15) << QPointF(cx+s*0.85, cy)
-             << QPointF(cx, cy+s*1.15) << QPointF(cx-s*0.85, cy);
-        p.drawPolygon(poly); break;
+void Axis::drawTitle(QPainter *p) const {
+    if (m_title.isEmpty()) return;
+    p->save();
+    p->setPen(m_titleColor);
+    QFont titleFont("Arial", 9, QFont::Bold);
+    p->setFont(titleFont);
+    QFontMetrics fm(titleFont);
+    if (m_vertical) {
+        // Draw Y axis title vertically
+        p->translate(m_rect.left() - fm.height() - 10, m_rect.center().y());
+        p->rotate(-90);
+        p->drawText(QRectF(-500, -fm.height() / 2.0, 1000, fm.height()),
+                    Qt::AlignCenter, m_title);
+    } else {
+        p->drawText(QRectF(m_rect.left(), m_rect.top() + 25,
+                           m_rect.width(), fm.height()),
+                    Qt::AlignCenter, m_title);
     }
-    case ScatterStyle::Triangle: {
-        QPolygonF poly;
-        poly << QPointF(cx, cy-s*1.1) << QPointF(cx+s*0.95, cy+s*0.65)
-             << QPointF(cx-s*0.95, cy+s*0.65);
-        p.drawPolygon(poly); break;
-    }
-    case ScatterStyle::Cross: {
-        QPen pen(color, s*0.7, Qt::SolidLine, Qt::RoundCap);
-        p.setPen(pen); p.setBrush(Qt::NoBrush);
-        p.drawLine(QPointF(cx-s*0.7, cy-s*0.7), QPointF(cx+s*0.7, cy+s*0.7));
-        p.drawLine(QPointF(cx+s*0.7, cy-s*0.7), QPointF(cx-s*0.7, cy+s*0.7));
-        break;
-    }
-    case ScatterStyle::Plus: {
-        QPen pen(color, s*0.7, Qt::SolidLine, Qt::RoundCap);
-        p.setPen(pen); p.setBrush(Qt::NoBrush);
-        p.drawLine(QPointF(cx-s*0.7, cy), QPointF(cx+s*0.7, cy));
-        p.drawLine(QPointF(cx, cy-s*0.7), QPointF(cx, cy+s*0.7));
-        break;
-    }
-    case ScatterStyle::Star: {
-        QPolygonF poly;
-        for (int i = 0; i < 5; ++i) {
-            double a1 = -kPi/2.0 + i*2.0*kPi/5.0;
-            double a2 = a1 + kPi/5.0;
-            poly << QPointF(cx+s*1.1*std::cos(a1), cy+s*1.1*std::sin(a1));
-            poly << QPointF(cx+s*0.45*std::cos(a2), cy+s*0.45*std::sin(a2));
-        }
-        p.drawPolygon(poly); break;
-    }
-    default: break;
-    }
+    p->restore();
 }
 
-void ChartRenderer::drawAxes(QPainter &p)
+// ------------------------------------------------------------------------
+// ChartModel
+// ------------------------------------------------------------------------
+ChartModel::ChartModel(QObject *parent)
+    : QObject(parent)
 {
-    Axis *ax = m_model->axisX(), *ay = m_model->axisY();
-    if (!ax || !ay) return;
-    QRectF pa = m_layout->plotArea();
-
-    // ---- Y ÷· ----
-    QVector<double> yt = m_layout->yTicks();
-    if (ay->isTicksVisible()) {
-        p.setFont(ay->labelFont());
-        QFontMetrics fm(ay->labelFont());
-        for (double v : yt) {
-            QPointF pt = m_layout->mapToPixel(m_layout->xMin(), v);
-            if (pt.y() < pa.top()-1 || pt.y() > pa.bottom()+1) continue;
-            QString txt = m_layout->formatAxisValue(ay, v);
-            p.setPen(ay->titleColor());
-            p.drawText(QPointF(pa.left()-fm.width(txt)-6, pt.y()+fm.ascent()/2.0-1), txt);
-            p.setPen(QPen(ay->tickColor(), 1));
-            bool in = (ay->tickDirection() == TickDirection::Inside);
-            if (in) p.drawLine(QPointF(pa.left(), pt.y()), QPointF(pa.left()+4, pt.y()));
-            else    p.drawLine(QPointF(pa.left()-4, pt.y()), QPointF(pa.left(), pt.y()));
-        }
-    }
-    if (ay->isSubTicksVisible() && ay->subTickCount()>0 && yt.size()>=2) {
-        p.setPen(QPen(ay->subTickColor(), 1));
-        bool in = (ay->subTickDirection() == TickDirection::Inside);
-        for (int i = 0; i < yt.size()-1; ++i) {
-            double step = (yt[i+1]-yt[i]) / double(ay->subTickCount()+1);
-            for (int j = 1; j <= ay->subTickCount(); ++j) {
-                QPointF pt = m_layout->mapToPixel(m_layout->xMin(), yt[i]+step*j);
-                if (pt.y()<pa.top() || pt.y()>pa.bottom()) continue;
-                if (in) p.drawLine(QPointF(pa.left(), pt.y()), QPointF(pa.left()+2.5, pt.y()));
-                else    p.drawLine(QPointF(pa.left()-2.5, pt.y()), QPointF(pa.left(), pt.y()));
-            }
-        }
-    }
-    if (!ay->title().isEmpty()) {
-        p.save(); p.setFont(ay->titleFont()); p.setPen(ay->titleColor());
-        p.translate(QPointF(pa.left()-40, pa.center().y())); p.rotate(-90);
-        QFontMetrics fm(ay->titleFont());
-        p.drawText(QPointF(-fm.width(ay->title())/2.0, 0), ay->title());
-        p.restore();
-    }
-
-    // ---- X ÷· ----
-    QVector<double> xt = m_layout->xTicks();
-    if (ax->isTicksVisible()) {
-        p.setFont(ax->labelFont());
-        QFontMetrics fm(ax->labelFont());
-        for (double v : xt) {
-            QPointF pt = m_layout->mapToPixel(v, m_layout->yMin());
-            if (pt.x() < pa.left()-1 || pt.x() > pa.right()+1) continue;
-            QString txt = m_layout->formatAxisValue(ax, v);
-            p.setPen(ax->titleColor());
-            p.drawText(QPointF(pt.x()-fm.width(txt)/2.0, pa.bottom()+fm.ascent()+4), txt);
-            p.setPen(QPen(ax->tickColor(), 1));
-            bool in = (ax->tickDirection() == TickDirection::Inside);
-            if (in) p.drawLine(QPointF(pt.x(), pa.bottom()), QPointF(pt.x(), pa.bottom()-4));
-            else    p.drawLine(QPointF(pt.x(), pa.bottom()), QPointF(pt.x(), pa.bottom()+4));
-        }
-    }
-    if (ax->isSubTicksVisible() && ax->subTickCount()>0 && xt.size()>=2) {
-        p.setPen(QPen(ax->subTickColor(), 1));
-        bool in = (ax->subTickDirection() == TickDirection::Inside);
-        for (int i = 0; i < xt.size()-1; ++i) {
-            double step = (xt[i+1]-xt[i]) / double(ax->subTickCount()+1);
-            for (int j = 1; j <= ax->subTickCount(); ++j) {
-                QPointF pt = m_layout->mapToPixel(xt[i]+step*j, m_layout->yMin());
-                if (pt.x()<pa.left() || pt.x()>pa.right()) continue;
-                if (in) p.drawLine(QPointF(pt.x(), pa.bottom()), QPointF(pt.x(), pa.bottom()-2.5));
-                else    p.drawLine(QPointF(pt.x(), pa.bottom()), QPointF(pt.x(), pa.bottom()+2.5));
-            }
-        }
-    }
-    if (!ax->title().isEmpty()) {
-        p.setFont(ax->titleFont()); p.setPen(ax->titleColor());
-        QFontMetrics fm(ax->titleFont());
-        double tw = fm.width(ax->title());
-        p.drawText(QPointF(pa.center().x()-tw/2.0, pa.bottom()+fm.height()+8), ax->title());
-    }
 }
 
-void ChartRenderer::drawTitle(QPainter &p)
-{
-    QString title = m_model->title();
-    if (title.isEmpty()) return;
-    const ChartTheme &t = m_model->theme();
-    p.setFont(t.titleFont); p.setPen(t.titleColor);
-    QFontMetrics fm(t.titleFont);
-    QRectF pa = m_layout->plotArea();
-    p.drawText(QPointF(pa.center().x()-fm.width(title)/2.0, pa.top()-8), title);
+ChartModel::~ChartModel() {
+    qDeleteAll(m_series);
+    m_series.clear();
+    qDeleteAll(m_axes);
+    m_axes.clear();
 }
 
-void ChartRenderer::drawLegend(QPainter &p, const QRectF &plotArea,
-                               const QList<Series*> &visible, const Legend &legend)
-{
-    if (visible.isEmpty() || legend.position == Legend::Hidden) return;
+void ChartModel::addSeries(Series *series) {
+    if (!series || m_series.contains(series)) return;
+    series->setParent(this);
+    series->setIndex(m_series.size());
+    m_series.append(series);
+    connectSeries(series);
+    emit seriesAdded(series);
+    emit dataChanged();
+}
 
-    p.setFont(legend.font);
+void ChartModel::removeSeries(Series *series) {
+    if (!series || !m_series.contains(series)) return;
+    m_series.removeOne(series);
+    series->setParent(nullptr);
+    emit seriesRemoved(series);
+    emit dataChanged();
+}
+
+void ChartModel::clearSeries() {
+    for (auto *s : m_series) {
+        emit seriesRemoved(s);
+        delete s;
+    }
+    m_series.clear();
+    emit dataChanged();
+}
+
+void ChartModel::addAxis(Axis *axis) {
+    if (!axis || m_axes.contains(axis)) return;
+    m_axes.append(axis);
+    emit axisAdded(axis);
+}
+
+void ChartModel::removeAxis(Axis *axis) {
+    if (!axis || !m_axes.contains(axis)) return;
+    m_axes.removeOne(axis);
+    emit axisRemoved(axis);
+}
+
+void ChartModel::setTheme(const ChartTheme &theme) {
+    m_theme = theme;
+    emit themeChanged();
+    emit dataChanged();
+}
+
+void ChartModel::connectSeries(Series *s) {
+    connect(s, &Series::dataChanged, this, &ChartModel::dataChanged);
+}
+
+// ------------------------------------------------------------------------
+// ChartLayout
+// ------------------------------------------------------------------------
+ChartLayout::ChartLayout(QObject *parent)
+    : QObject(parent) {}
+
+ChartLayout::LayoutInfo ChartLayout::calculate(
+    const QSize &widgetSize,
+    const QString &title,
+    const QFont &titleFont,
+    Axis *xAxis,
+    Axis *yAxis,
+    const Legend &legend,
+    const QList<Series*> &series) const
+{
+    ChartLayout::LayoutInfo info;
+    Q_UNUSED(xAxis)
+    Q_UNUSED(yAxis)
+
+    double w = widgetSize.width();
+    double h = widgetSize.height();
+    info.margins = QMarginsF(5, 5, 5, 5);
+
+    // Title area
+    double top = info.margins.top();
+    if (!title.isEmpty()) {
+        QFontMetrics fm(titleFont);
+        int th = fm.height() + 8;
+        info.titleRect = QRectF(5, top, w - 10, th);
+        top = info.titleRect.bottom() + 5;
+    }
+
+    // Estimate axis label sizes
+    int yLabelWidth = 55;  // enough for typical numbers
+    int xLabelHeight = 22; // enough for date/number labels
+    int yTitleWidth = yAxis && !yAxis->title().isEmpty() ? 18 : 0;
+    int xTitleHeight = xAxis && !xAxis->title().isEmpty() ? 18 : 0;
+
+    // Legend size estimate
+    QSizeF legendSize = measureLegend(legend, series);
+
+    // Legend above chart
+    if (legend.position == Legend::AboveChart && !series.isEmpty()) {
+        info.legendRect = QRectF(
+            (w - legendSize.width()) / 2.0,
+            top + m_legendMargin,
+            legendSize.width(),
+            legendSize.height());
+        top = info.legendRect.bottom() + m_legendMargin;
+    }
+
+    // Plot area
+    double left = info.margins.left() + yLabelWidth + yTitleWidth + m_plotMargin;
+    double bottom = h - info.margins.bottom() - xLabelHeight - xTitleHeight - m_plotMargin;
+
+    info.yAxisRect = QRectF(0, top, left, bottom - top);
+    info.xAxisRect = QRectF(left, bottom, w - left - info.margins.right(), xLabelHeight + xTitleHeight + 5);
+    info.chartArea = QRectF(left, top, w - left - info.margins.right(), bottom - top);
+
+    // Legend below chart
+    if (legend.position == Legend::BelowChart && !series.isEmpty()) {
+        info.legendRect = QRectF(
+            (w - legendSize.width()) / 2.0,
+            bottom + 10,
+            legendSize.width(),
+            legendSize.height());
+    }
+
+    // Set axis geometries (for drawing grid/labels)
+    if (xAxis) {
+        xAxis->setRect(info.xAxisRect);
+        xAxis->setGridRect(info.chartArea);
+    }
+    if (yAxis) {
+        yAxis->setRect(info.yAxisRect);
+        yAxis->setGridRect(info.chartArea);
+    }
+
+    return info;
+}
+
+QSizeF ChartLayout::measureLegend(const Legend &legend, const QList<Series*> &series) const {
+    if (series.isEmpty()) return QSizeF(0, 0);
+
     QFontMetrics fm(legend.font);
-    const int swatchW = 14, swatchH = 10, gap = 6, itemGap = 14, pad = 8;
-    int rowH = qMax(fm.height(), swatchH) + 4;
-    int legendW, legendH;
+    double maxTextWidth = 0;
+    int iconWidth = 16;
+    int itemSpacing = 4;
+    int visibleCount = 0;
+    for (auto *s : series) {
+        if (!s->isVisible()) continue;
+        ++visibleCount;
+        double tw = fm.horizontalAdvance(s->name());
+        if (tw > maxTextWidth) maxTextWidth = tw;
+    }
+    if (visibleCount == 0) return QSizeF(0, 0);
+
+    double itemWidth = iconWidth + itemSpacing + maxTextWidth + 10;
+    double itemHeight = fm.height() + 4;
 
     if (legend.orientation == Legend::Horizontal) {
-        int totalW = 0;
-        for (Series *s : visible) totalW += swatchW + gap + fm.width(s->name());
-        totalW += (visible.size()-1) * itemGap;
-        legendW = totalW + pad*2; legendH = rowH + pad*2;
+        double totalW = visibleCount * itemWidth + 10;
+        return QSizeF(totalW, itemHeight + 6);
     } else {
-        int maxItemW = 0;
-        for (Series *s : visible) maxItemW = qMax(maxItemW, swatchW+gap+fm.width(s->name()));
-        legendW = maxItemW + pad*2;
-        legendH = visible.size()*rowH + (visible.size()-1)*2 + pad*2;
-    }
-
-    double lx, ly;
-    switch (legend.position) {
-    case Legend::Top:      lx = plotArea.left()+(plotArea.width()-legendW)/2.0; ly = plotArea.top()+4; break;
-    case Legend::Bottom:   lx = plotArea.left()+(plotArea.width()-legendW)/2.0; ly = plotArea.bottom()-legendH-4; break;
-    case Legend::AboveChart:
-        // Õ‚≤øÕº¿˝£∫Œª”⁄ªÊÕº«¯…œ∑Ω£¨ÀÆ∆Ωæ”÷–
-        lx = plotArea.left() + (plotArea.width() - legendW) / 2.0;
-        ly = plotArea.top() - legendH - 4;
-        break;
-    default: // TopRight
-        lx = plotArea.right()-legendW-6; ly = plotArea.top()+4; break;
-    }
-
-    QRectF lr(lx, ly, legendW, legendH);
-    p.setPen(QPen(legend.borderColor, 1));
-    p.setBrush(legend.backgroundColor);
-    p.drawRoundedRect(lr, legend.borderRadius, legend.borderRadius);
-
-    double cx = lx+pad, cy = ly+pad;
-    if (legend.orientation == Legend::Horizontal) {
-        for (Series *s : visible) {
-            QRectF sw(cx, cy+(rowH-swatchH)/2.0, swatchW, swatchH);
-            p.fillRect(sw, s->color()); p.setPen(s->color().darker(130)); p.drawRect(sw);
-            p.setPen(QColor(60,60,60));
-            p.drawText(QPointF(cx+swatchW+gap, cy+fm.ascent()+(rowH-fm.height())/2.0-1), s->name());
-            cx += swatchW+gap+fm.width(s->name())+itemGap;
-        }
-    } else {
-        for (Series *s : visible) {
-            QRectF sw(cx, cy+(rowH-swatchH)/2.0, swatchW, swatchH);
-            p.fillRect(sw, s->color()); p.setPen(s->color().darker(130)); p.drawRect(sw);
-            p.setPen(QColor(60,60,60));
-            p.drawText(QPointF(cx+swatchW+gap, cy+fm.ascent()+(rowH-fm.height())/2.0-1), s->name());
-            cy += rowH+2;
-        }
+        double totalH = visibleCount * itemHeight + 6;
+        return QSizeF(itemWidth + 10, totalH);
     }
 }
 
+// ------------------------------------------------------------------------
+// PaintBuffer
+// ------------------------------------------------------------------------
+PaintBuffer::PaintBuffer() {}
 
-void ChartRenderer::drawTooltip(QPainter &p, const TooltipData &tip)
-{
-    if (!tip.visible || tip.text.isEmpty()) return;
-    const ChartTheme &t = m_model->theme();
-    p.setFont(t.tooltipFont);
-    QFontMetrics fm(t.tooltipFont);
-
-    QStringList rawLines = tip.text.split('\n');
-    struct TL { QColor color; QString text; };
-    QList<TL> lines;
-    for (const QString &raw : rawLines) {
-        TL tl; int bar = raw.indexOf('|');
-        if (bar > 0 && raw.left(bar).startsWith('#') && raw.left(bar).length() == 7) {
-            tl.color = QColor(raw.left(bar)); tl.text = raw.mid(bar+1);
-        } else { tl.text = raw; }
-        lines.append(tl);
-    }
-
-    const int padX=10, padY=6, spacing=3, swatchW=10, swatchH=10, swatchGap=6;
-    int maxTW = 0;
-    for (const TL &tl : lines) maxTW = qMax(maxTW, fm.width(tl.text));
-    int textH = lines.size()*fm.height() + (lines.size()-1)*spacing;
-    int tipW = maxTW + padX*2 + swatchW + swatchGap;
-    int tipH = textH + padY*2;
-
-    double tx = tip.position.x()+14, ty = tip.position.y()-tipH-10;
-    QRectF pa = m_layout->plotArea();
-    if (tx+tipW > pa.right()+50) tx = tip.position.x()-tipW-14;
-    if (ty < 4) ty = tip.position.y()+14;
-
-    QRectF tr(tx, ty, tipW, tipH);
-    p.setPen(Qt::NoPen);
-    p.setBrush(t.tooltipShadow);
-    p.drawRoundedRect(tr.translated(2,2), t.tooltipRadius, t.tooltipRadius);
-    p.setPen(QPen(t.tooltipBorder, 1));
-    p.setBrush(t.tooltipBackground);
-    p.drawRoundedRect(tr, t.tooltipRadius, t.tooltipRadius);
-
-    double textX = tx+padX, textY = ty+padY+fm.ascent();
-    for (int i = 0; i < lines.size(); ++i) {
-        double ly = textY + i*(fm.height()+spacing);
-        QColor c = lines[i].color;
-        if (c.isValid()) {
-            QRectF sw(textX, ly-fm.ascent()+(fm.height()-swatchH)/2.0, swatchW, swatchH);
-            p.fillRect(sw, c); p.setPen(c.darker(140)); p.setBrush(Qt::NoBrush); p.drawRect(sw);
-        }
-        p.setPen(QColor(60,60,60));
-        p.drawText(QPointF(textX+swatchW+swatchGap, ly), lines[i].text);
-    }
-
-    p.setPen(QPen(QColor(180,180,180), 1, Qt::DotLine));
-    p.drawLine(tip.position,
-               QPointF(tr.center().x(), tr.contains(tip.position) ? tr.bottom() : tr.top()));
+PaintBuffer::~PaintBuffer() {
+    endPainting();
 }
 
-// ========================================================================
-//  ChartWidget  µœ÷
-// ========================================================================
+void PaintBuffer::resize(const QSize &size, double devicePixelRatio) {
+    if (m_pixmap.size() == size)
+        return;
+    m_pixmap = QPixmap(size * devicePixelRatio);
+    m_pixmap.setDevicePixelRatio(devicePixelRatio);
+}
 
-ChartWidget::ChartWidget(QWidget *parent) : QWidget(parent)
+QPainter *PaintBuffer::beginPainting(const QColor &clearColor) {
+    endPainting();
+    m_pixmap.fill(clearColor);
+    m_activePainter = new QPainter(&m_pixmap);
+    m_activePainter->setRenderHint(QPainter::Antialiasing);
+    return m_activePainter;
+}
+
+void PaintBuffer::endPainting() {
+    if (m_activePainter) {
+        m_activePainter->end();
+        delete m_activePainter;
+        m_activePainter = nullptr;
+    }
+}
+
+void PaintBuffer::paint(QPainter *target) const {
+    if (!m_pixmap.isNull())
+        target->drawPixmap(0, 0, m_pixmap);
+}
+
+// ------------------------------------------------------------------------
+// ChartWidget
+// ------------------------------------------------------------------------
+ChartWidget::ChartWidget(QWidget *parent)
+    : QWidget(parent)
 {
-    ensureComponents();
-    setMinimumSize(400, 300);
-    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setMouseTracking(true);
-    setFocusPolicy(Qt::StrongFocus);
+    setFocusPolicy(Qt::ClickFocus);
+    setMinimumSize(300, 200);
+
+    m_model  = new ChartModel(this);
+    m_layout = new ChartLayout(this);
+    m_buffer = new PaintBuffer();
+
+    m_xAxis = new Axis(false, this);
+    m_yAxis = new Axis(true, this);
+    m_xAxis->setRange(0, 100);
+    m_yAxis->setRange(0, 100);
+
+    m_model->addAxis(m_xAxis);
+    m_model->addAxis(m_yAxis);
+
+    // Connect model signals ‚Üí refresh
+    connect(m_model, &ChartModel::dataChanged, this, [this]() {
+        m_dirty = true;
+        update();
+    });
+    connect(m_model, &ChartModel::titleChanged, this, [this]() {
+        m_dirty = true;
+        update();
+    });
 }
 
-ChartWidget::~ChartWidget()
-{
-    delete m_renderer;
-    delete m_layout;
-    delete m_model;
+ChartWidget::~ChartWidget() {
+    delete m_buffer;
 }
 
-void ChartWidget::ensureComponents()
-{
-    if (!m_model) {
-        m_model = new ChartModel(this);
-        connect(m_model, &ChartModel::dataChanged, this, &ChartWidget::markDirty);
-        connect(m_model, &ChartModel::themeChanged, this, &ChartWidget::markDirty);
-    }
-    if (!m_layout)  m_layout  = new ChartLayout(m_model, this);
-    if (!m_renderer) m_renderer = new ChartRenderer(m_model, m_layout);
-
-    if (!m_model->axisX()) addAxis(new Axis(AxisPosition::Bottom));
-    if (!m_model->axisY()) addAxis(new Axis(AxisPosition::Left));
+void ChartWidget::addSeries(Series *series) {
+    m_model->addSeries(series);
 }
 
-Axis* ChartWidget::axisX() const { return m_model->axisX(); }
-Axis* ChartWidget::axisY() const { return m_model->axisY(); }
-
-ChartModel*  ChartWidget::model()  const { return m_model; }
-ChartLayout* ChartWidget::layout() const { return m_layout; }
-
-void ChartWidget::addAxis(Axis *a)                           { m_model->addAxis(a); markDirty(); }
-void ChartWidget::removeAxis(Axis *a)                        { m_model->removeAxis(a); markDirty(); }
-void ChartWidget::addSeries(Series *s)                       { m_model->addSeries(s); markDirty(); }
-void ChartWidget::removeSeries(Series *s)                    { m_model->removeSeries(s); markDirty(); }
-void ChartWidget::setCategories(const QStringList &c)        { m_model->setCategories(c); markDirty(); }
-void ChartWidget::setTitle(const QString &t)                 { m_model->setTitle(t); markDirty(); }
-void ChartWidget::setTheme(const ChartTheme &t)              { m_model->setTheme(t); markDirty(); }
-
-void ChartWidget::setLegend(const Legend &legend) { m_legend = legend; markDirty(); }
-Legend ChartWidget::legend() const { return m_legend; }
-void ChartWidget::setLegendPosition(Legend::Position pos) { m_legend.position = pos; markDirty(); }
-void ChartWidget::setLegendOrientation(Legend::Orientation ori) { m_legend.orientation = ori; markDirty(); }
-
-void ChartWidget::setRescaleMode(RescaleMode m)              { m_rescaleMode = m; markDirty(); }
-ChartWidget::RescaleMode ChartWidget::rescaleMode() const    { return m_rescaleMode; }
-void ChartWidget::fitToData()                                { m_rescaleMode = RescaleMode::FitVisible; markDirty(); }
-
-void ChartWidget::zoom(double factor)
-{
-    Axis *ax = m_model->axisX(), *ay = m_model->axisY();
-    if (!ax || !ay) return;
-    QRectF pa = m_layout->plotArea();
-    double xr = m_layout->xMax()-m_layout->xMin();
-    double yr = m_layout->yMax()-m_layout->yMin();
-    if (qFuzzyIsNull(xr) || qFuzzyIsNull(yr)) return;
-    double cx = m_layout->xMin()+(pa.center().x()-pa.left())/pa.width()*xr;
-    double cy = m_layout->yMin()+(pa.bottom()-pa.center().y())/pa.height()*yr;
-    ax->setRange(cx-xr*factor/2.0, cx+xr*factor/2.0);
-    ay->setRange(cy-yr*factor/2.0, cy+yr*factor/2.0);
-    m_rescaleMode = RescaleMode::Manual;
-    markDirty();
+void ChartWidget::removeSeries(Series *series) {
+    m_model->removeSeries(series);
 }
 
-void ChartWidget::zoomTo(double x1, double x2, double y1, double y2)
-{
-    Axis *ax = m_model->axisX(), *ay = m_model->axisY();
-    if (!ax || !ay) return;
-    ax->setRange(x1, x2); ay->setRange(y1, y2);
-    m_rescaleMode = RescaleMode::Manual;
-    markDirty();
+void ChartWidget::setTheme(const ChartTheme &theme) {
+    m_model->setTheme(theme);
 }
 
-void ChartWidget::setTooltipEnabled(bool on) { m_tooltipEnabled = on; if (!on) { m_showTooltip = false; update(); } }
-bool ChartWidget::isTooltipEnabled() const { return m_tooltipEnabled; }
+void ChartWidget::refresh() {
+    m_dirty = true;
+    update();
+}
 
-QPixmap ChartWidget::exportToPixmap(const QSize &size) const
-{
-    QSize ps = size.isValid() ? size : this->size();
-    QPixmap pm(ps);
+QPixmap ChartWidget::exportToPixmap(const QSize &size) {
+    QPixmap pm(size);
     pm.fill(m_model->theme().background);
-    QPainter p(&pm);
-    const_cast<ChartLayout*>(m_layout)->recalculate(ps.width(), ps.height());
-    m_renderer->render(p, ps.width(), ps.height());
+    QPainter painter(&pm);
+    painter.setRenderHint(QPainter::Antialiasing);
+    renderChart(painter, size);
+    painter.end();
     return pm;
 }
 
-void ChartWidget::refresh() { markDirty(); }
-
-void ChartWidget::markDirty()
-{
-    m_bufferDirty = true;
-    m_layout->invalidate();
-    update();
-}
-
-void ChartWidget::resizeEvent(QResizeEvent *e)
-{
-    QWidget::resizeEvent(e);
-    m_buffer = QPixmap(size());
-    m_buffer.fill(m_model->theme().background);
-    m_bufferDirty = true;
-}
-
-void ChartWidget::paintEvent(QPaintEvent *)
-{
-    QPainter painter(this);
-    if (m_bufferDirty || m_buffer.size() != size()) rebuildBuffer();
-    painter.drawPixmap(0, 0, m_buffer);
-}
-
-void ChartWidget::rebuildBuffer()
-{
-    QList<Series*> vis;
-    for (Series *s : m_model->seriesList()) if (s->isVisible()) vis.append(s);
-
-    double outsideLegendH = 0;
-    if (m_legend.position == Legend::AboveChart && !vis.isEmpty()) {
-        QFontMetrics fm(m_legend.font);
-        const int swatchH = 10, pad = 8;
-        int rowH = qMax(fm.height(), swatchH) + 4;
-        int legendH;
-        if (m_legend.orientation == Legend::Horizontal) {
-            legendH = rowH + pad * 2;
-        } else {
-            legendH = vis.size() * rowH + (vis.size() - 1) * 2 + pad * 2;
+// ------------------------------------------------------------------------
+// Paint Event
+// ------------------------------------------------------------------------
+void ChartWidget::paintEvent(QPaintEvent *event) {
+    Q_UNUSED(event)
+    if (m_dirty || m_buffer->size() != size()) {
+        m_buffer->resize(size(), devicePixelRatio());
+        QPainter *bufPainter = m_buffer->beginPainting(m_model->theme().background);
+        if (bufPainter && bufPainter->isActive()) {
+            bufPainter->setRenderHint(QPainter::Antialiasing);
+            renderChart(*bufPainter, size());
         }
-        outsideLegendH = legendH + 4;  // ”Î plotArea µƒº‰æ‡
+        m_buffer->endPainting();
+        m_dirty = false;
     }
-    m_layout->setOutsideLegendHeight(outsideLegendH);
-
-    m_buffer = QPixmap(size());
-    m_buffer.fill(m_model->theme().background);
-    QPainter p(&m_buffer);
-    m_layout->recalculate(width(), height());
-    m_renderer->render(p, width(), height());
-
-    m_renderer->drawLegend(p, m_layout->plotArea(), vis, m_legend);
-
-    if (m_showTooltip) {
-        ChartRenderer::TooltipData tip;
-        tip.visible = true; tip.position = m_tooltipPos;
-        tip.text = m_tooltipText; tip.color = m_tooltipColor;
-        m_renderer->drawTooltip(p, tip);
-    }
-    m_bufferDirty = false;
+    QPainter widgetPainter(this);
+    widgetPainter.setRenderHint(QPainter::Antialiasing);
+    m_buffer->paint(&widgetPainter);
 }
 
-// ----  Û±ÍΩªª• ----
-
-void ChartWidget::mousePressEvent(QMouseEvent *e)
-{
-    if (e->button() == Qt::LeftButton && m_layout->plotArea().contains(e->pos())) {
-        m_panning = true; m_panStart = e->pos();
-        m_panXMin = m_layout->xMin(); m_panXMax = m_layout->xMax();
-        m_panYMin = m_layout->yMin(); m_panYMax = m_layout->yMax();
-        setCursor(Qt::ClosedHandCursor);
-    }
-    QWidget::mousePressEvent(e);
+// ------------------------------------------------------------------------
+// Resize
+// ------------------------------------------------------------------------
+void ChartWidget::resizeEvent(QResizeEvent *event) {
+    QWidget::resizeEvent(event);
+    m_dirty = true;
 }
 
-void ChartWidget::mouseMoveEvent(QMouseEvent *e)
+// ------------------------------------------------------------------------
+// renderChart ‚Äî main rendering pipeline
+// ------------------------------------------------------------------------
+void ChartWidget::renderChart(QPainter &p, const QSize &size) {
+    // 1. Calculate layout
+    auto info = m_layout->calculate(
+        size, m_model->title(), m_titleFont,
+        m_xAxis, m_yAxis, m_legend, m_model->seriesList());
+    QRectF plotArea = info.chartArea;
+    if (plotArea.isEmpty()) return;
+
+    // 2. Draw grid (behind everything)
+    renderGrid(p, plotArea);
+
+    // 3. Draw line series (fills first, then lines/scatters)
+    for (auto *s : m_model->seriesList()) {
+        if (!s->isVisible()) continue;
+        if (auto *ls = qobject_cast<LineSeries*>(s))
+            renderLineSeries(p, plotArea, ls);
+    }
+
+    // 4. Draw stacked bars
+    renderStackedBarSeries(p, plotArea);
+
+    // 5. Draw grouped bars
+    renderBarSeries(p, plotArea);
+
+    // 6. Draw axes on top
+    renderAxes(p, plotArea);
+
+    // 7. Draw title
+    renderTitle(p, info.titleRect);
+
+    // 8. Draw legend
+    renderLegend(p, info.legendRect);
+}
+
+// ------------------------------------------------------------------------
+// Render Background
+// ------------------------------------------------------------------------
+void ChartWidget::renderBackground(QPainter &p, const QRectF &area) {
+    p.fillRect(area, m_model->theme().background);
+}
+
+// ------------------------------------------------------------------------
+// Render Title
+// ------------------------------------------------------------------------
+void ChartWidget::renderTitle(QPainter &p, const QRectF &rect) {
+    QString title = m_model->title();
+    if (title.isEmpty() || rect.isEmpty()) return;
+    p.save();
+    p.setPen(m_model->theme().titleColor);
+    p.setFont(m_titleFont);
+    p.drawText(rect, Qt::AlignCenter, title);
+    p.restore();
+}
+
+// ------------------------------------------------------------------------
+// Render Legend
+// ------------------------------------------------------------------------
+void ChartWidget::renderLegend(QPainter &p, const QRectF &rect) {
+    if (rect.isEmpty()) return;
+    auto series = m_model->seriesList();
+    if (series.isEmpty()) return;
+
+    p.save();
+    // Background
+    p.setBrush(m_legend.backgroundColor);
+    p.setPen(QPen(m_legend.borderColor, 1));
+    p.drawRoundedRect(rect, 4, 4);
+
+    p.setFont(m_legend.font);
+    QFontMetrics fm(m_legend.font);
+    int iconW = 14;
+    int spacing = 4;
+    int x0 = int(rect.left() + 6);
+    int y0 = int(rect.top() + 4);
+
+    int visibleCount = 0;
+    for (auto *s : series)
+        if (s->isVisible()) ++visibleCount;
+
+    if (m_legend.orientation == Legend::Horizontal) {
+        int x = x0;
+        for (auto *s : series) {
+            if (!s->isVisible()) continue;
+            // Icon
+            p.fillRect(QRect(x, y0 + 2, iconW, iconW), s->color());
+            // Text
+            p.setPen(m_legend.textColor);
+            int tw = fm.horizontalAdvance(s->name());
+            QRectF tr(x + iconW + spacing, y0, tw + 4, fm.height() + 2);
+            p.drawText(tr, Qt::AlignLeft | Qt::AlignVCenter, s->name());
+            x += iconW + spacing + tw + 10;
+        }
+    } else {
+        int y = y0;
+        for (auto *s : series) {
+            if (!s->isVisible()) continue;
+            p.fillRect(QRect(x0, y + 2, iconW, iconW), s->color());
+            p.setPen(m_legend.textColor);
+            QRectF tr(x0 + iconW + spacing, y, rect.right() - x0 - iconW - spacing - 4, fm.height() + 2);
+            p.drawText(tr, Qt::AlignLeft | Qt::AlignVCenter, s->name());
+            y += fm.height() + 6;
+        }
+    }
+    p.restore();
+}
+
+// ------------------------------------------------------------------------
+// Render Grid
+// ------------------------------------------------------------------------
+void ChartWidget::renderGrid(QPainter &p, const QRectF &plotArea) {
+    Q_UNUSED(plotArea)
+    // Sub-grid
+    m_xAxis->drawSubGrid(&p);
+    m_yAxis->drawSubGrid(&p);
+
+    // Major grid
+    m_xAxis->drawGrid(&p);
+    m_yAxis->drawGrid(&p);
+}
+
+// ------------------------------------------------------------------------
+// Render Axes
+// ------------------------------------------------------------------------
+void ChartWidget::renderAxes(QPainter &p, const QRectF &plotArea) {
+    Q_UNUSED(plotArea)
+    m_xAxis->drawAxis(&p);
+    m_xAxis->drawLabels(&p);
+    m_xAxis->drawTitle(&p);
+
+    m_yAxis->drawAxis(&p);
+    m_yAxis->drawLabels(&p);
+    m_yAxis->drawTitle(&p);
+}
+
+// ------------------------------------------------------------------------
+// Adaptive polyline simplification (vertical band filter)
+// Keeps one point per distinct pixel column. For dense data this preserves
+// visual shape while dramatically reducing vertex count.
+// ------------------------------------------------------------------------
+static QVector<QPointF> simplifyPolyline(const QVector<QPointF> &pts, int pixelWidth) {
+    if (pts.size() <= pixelWidth * 2)
+        return pts;
+    QVector<QPointF> result;
+    result.reserve(pixelWidth * 2);
+    int lastCol = int(pts.first().x());
+    result.append(pts.first());
+    for (int i = 1; i < pts.size() - 1; ++i) {
+        int col = int(pts[i].x());
+        if (col == lastCol) continue;
+        lastCol = col;
+        result.append(pts[i]);
+    }
+    result.append(pts.last());
+    return result;
+}
+
+// ------------------------------------------------------------------------
+// Generate pixel coordinates for line series (view-culled, sorted/unsorted)
+// ------------------------------------------------------------------------
+QVector<QPointF> ChartWidget::generateLineSeriesPixels(
+    const QRectF &plotArea,
+    const QVector<LineSeries::DataPoint> &data,
+    int dataSize,
+    const QStringList &cats,
+    bool useCats) const
 {
-    if (m_panning) {
-        Axis *ax = m_model->axisX(), *ay = m_model->axisY();
-        if (ax && ay) {
-            QPoint d = e->pos() - m_panStart;
-            QRectF pa = m_layout->plotArea();
-            double xr = m_panXMax-m_panXMin, yr = m_panYMax-m_panYMin;
-            if (!qFuzzyIsNull(xr) && !qFuzzyIsNull(yr)) {
-                ax->setRange(m_panXMin - d.x()/pa.width()*xr, m_panXMax - d.x()/pa.width()*xr);
-                ay->setRange(m_panYMin + d.y()/pa.height()*yr, m_panYMax + d.y()/pa.height()*yr);
-                m_rescaleMode = RescaleMode::Manual;
-                markDirty();
+    if (useCats) {
+        int nCats = cats.size();
+        double slotW = plotArea.width() / nCats;
+        QVector<QPointF> px;
+        px.reserve(dataSize);
+        for (const auto &dp : data) {
+            int idx = qBound(0, int(dp.key), nCats - 1);
+            px.append(QPointF(plotArea.left() + (idx + 0.5) * slotW,
+                              m_yAxis->coordToPixel(dp.value)));
+        }
+        return px;
+    }
+
+    double xMin = m_xAxis->min(), xMax = m_xAxis->max();
+    int b = 0, e = dataSize;
+    bool sorted = (dataSize < 2 || data.last().key >= data.first().key);
+    if (sorted) {
+        auto lessDP = [](const LineSeries::DataPoint &dp, double key) { return dp.key < key; };
+        auto lessKey = [](double key, const LineSeries::DataPoint &dp) { return key < dp.key; };
+        b = int(std::lower_bound(data.begin(), data.end(), xMin, lessDP) - data.begin());
+        e = int(std::upper_bound(data.begin(), data.end(), xMax, lessKey) - data.begin());
+        if (b >= e) return {};
+    }
+
+    QVector<QPointF> px;
+    px.reserve(sorted ? (e - b) : dataSize);
+    if (sorted) {
+        for (int i = b; i < e; ++i)
+            px.append(QPointF(m_xAxis->coordToPixel(data[i].key),
+                              m_yAxis->coordToPixel(data[i].value)));
+    } else {
+        for (const auto &dp : data) {
+            if (dp.key < xMin || dp.key > xMax) continue;
+            px.append(QPointF(m_xAxis->coordToPixel(dp.key),
+                              m_yAxis->coordToPixel(dp.value)));
+        }
+    }
+    return px;
+}
+
+// ------------------------------------------------------------------------
+// Render LineSeries ‚Äî Âê´ 5 È°πÁªòÂà∂Á≠ñÁï•‰ºòÂåñ
+//   1. ÂèØËßÅËåÉÂõ¥Ë£ÅÂâ™ (view culling)
+//   2. ‰∫åÂàÜÊü•ÊâæÂÆö‰ΩçÊï∞ÊçÆËåÉÂõ¥ (binary search for sorted data)
+//   3. drawPolyline ÊâπÈáèÁªòÂà∂ (Êõø‰ª£ÈÄêÊÆµ drawLine)
+//   4. Ëá™ÈÄÇÂ∫îÈôçÈááÊ†∑ (adaptive simplification)
+//   5. Êï£ÁÇπÂØÜÂ∫¶ÈòàÂÄº (scatter density guard)
+// ------------------------------------------------------------------------
+void ChartWidget::renderLineSeries(QPainter &p, const QRectF &plotArea, LineSeries *series) {
+    if (!series || series->dataCount() < 1) return;
+
+    p.save();
+    p.setClipRect(plotArea);
+
+    const auto &data = series->allData();
+    int dataSize = data.size();
+    QStringList cats = m_model->categories();
+    bool useCats = !cats.isEmpty();
+
+    // Generate pixel coordinates from visible data range
+    QVector<QPointF> pixels = generateLineSeriesPixels(plotArea, data, dataSize, cats, useCats);
+
+    if (pixels.size() < 1) { p.restore(); return; }
+
+    // 3. Adaptive simplification for dense data
+    int pw = qMax(1, int(plotArea.width()));
+    if (pixels.size() > pw * 2)
+        pixels = simplifyPolyline(pixels, pw);
+
+    //  4. Fill (under curve to y=0 baseline)
+    if (series->fillEnabled() && pixels.size() >= 2) {
+        double baseY = m_yAxis->coordToPixel(0);
+        QPainterPath fillPath;
+        fillPath.moveTo(pixels.first().x(), baseY);
+        for (const auto &pt : pixels)
+            fillPath.lineTo(pt);
+        fillPath.lineTo(pixels.last().x(), baseY);
+        fillPath.closeSubpath();
+
+        if (auto *grad = series->fillBrush().gradient()) {
+            if (grad->type() == QGradient::LinearGradient) {
+                QLinearGradient g = *static_cast<const QLinearGradient*>(grad);
+                g.setCoordinateMode(QGradient::ObjectBoundingMode);
+                g.setStart(0, 0);
+                g.setFinalStop(0, 1);
+                p.setBrush(QBrush(g));
+            } else {
+                p.setBrush(series->fillBrush());
+            }
+        } else {
+            p.setBrush(series->fillBrush());
+        }
+        p.setPen(Qt::NoPen);
+        p.drawPath(fillPath);
+    }
+
+    // 5. Line  single batch drawPolyline
+    if (pixels.size() >= 2) {
+        QPen linePen(series->color(), series->lineWidth());
+        p.setPen(linePen);
+        p.setBrush(Qt::NoBrush);
+        p.drawPolyline(pixels);
+    }
+
+    // 6. Scatter markers ‚Äî skip if too dense
+    if (series->scatterStyle() != ScatterStyle::None && pixels.size() <= 500) {
+        double r = series->markerSize();
+        p.setBrush(series->color());
+        p.setPen(QPen(series->color().darker(120), 1));
+        for (const auto &pt : pixels) {
+            switch (series->scatterStyle()) {
+            case ScatterStyle::Circle:
+                p.drawEllipse(pt, r, r); break;
+            case ScatterStyle::Square:
+                p.drawRect(QRectF(pt.x() - r, pt.y() - r, r * 2, r * 2)); break;
+            case ScatterStyle::Diamond: {
+                QPolygonF d;
+                d << QPointF(pt.x(), pt.y() - r) << QPointF(pt.x() + r, pt.y())
+                  << QPointF(pt.x(), pt.y() + r) << QPointF(pt.x() - r, pt.y());
+                p.drawPolygon(d); break;
+            }
+            case ScatterStyle::Triangle: {
+                QPolygonF t;
+                t << QPointF(pt.x(), pt.y() - r)
+                  << QPointF(pt.x() + r * 0.866, pt.y() + r * 0.5)
+                  << QPointF(pt.x() - r * 0.866, pt.y() + r * 0.5);
+                p.drawPolygon(t); break;
+            }
+            default: break;
             }
         }
     }
-    findNearest(e->pos());
-    update();
-    QWidget::mouseMoveEvent(e);
+
+    //  7. Hover highlight
+    if (m_hoveredSeriesIdx >= 0 && m_hoveredPointIdx >= 0) {
+        if (qobject_cast<LineSeries*>(m_model->seriesList().value(m_hoveredSeriesIdx)) == series) {
+            if (m_hoveredPointIdx >= 0 && m_hoveredPointIdx < dataSize) {
+                double hx = useCats
+                    ? plotArea.left() + (qBound(0, int(data[m_hoveredPointIdx].key), cats.size() - 1) + 0.5) * (plotArea.width() / cats.size())
+                    : m_xAxis->coordToPixel(data[m_hoveredPointIdx].key);
+                double hy = m_yAxis->coordToPixel(data[m_hoveredPointIdx].value);
+                p.setPen(QPen(Qt::white, 2));
+                p.setBrush(series->color());
+                p.drawEllipse(QPointF(hx, hy), 6, 6);
+            }
+        }
+    }
+
+    p.restore();
 }
 
-void ChartWidget::mouseReleaseEvent(QMouseEvent *e)
-{
-    if (e->button() == Qt::LeftButton) { m_panning = false; setCursor(Qt::ArrowCursor); }
-    QWidget::mouseReleaseEvent(e);
-}
-
-void ChartWidget::mouseDoubleClickEvent(QMouseEvent *) { fitToData(); }
-
-void ChartWidget::wheelEvent(QWheelEvent *e)
-{
-    Axis *ax = m_model->axisX(), *ay = m_model->axisY();
-    if (!ax || !ay) return;
-    QRectF pa = m_layout->plotArea();
-    if (!pa.contains(e->pos())) { QWidget::wheelEvent(e); return; }
-
-    double factor = (e->angleDelta().y() > 0) ? 0.85 : 1.18;
-    double xr = m_layout->xMax()-m_layout->xMin();
-    double yr = m_layout->yMax()-m_layout->yMin();
-    if (qFuzzyIsNull(xr) || qFuzzyIsNull(yr)) return;
-
-    double dx = m_layout->pixelXToData(e->pos().x());
-    double dy = m_layout->pixelYToData(e->pos().y());
-    double rx = (dx-m_layout->xMin())/xr;
-    double ry = (dy-m_layout->yMin())/yr;
-    double nxr = xr*factor, nyr = yr*factor;
-    ax->setRange(dx-rx*nxr, dx-rx*nxr+nxr);
-    ay->setRange(dy-ry*nyr, dy-ry*nyr+nyr);
-    m_rescaleMode = RescaleMode::Manual;
-    markDirty();
-    e->accept();
-}
-
-void ChartWidget::contextMenuEvent(QContextMenuEvent *e)
-{
-    Axis *ax = m_model->axisX(), *ay = m_model->axisY();
-    QMenu menu(this);
-    menu.addAction("Fit to Data", this, &ChartWidget::fitToData);
-    menu.addSeparator();
-
-    auto addCheck = [&](QMenu *m, const QString &text, bool chk) -> QAction* {
-        QAction *a = m->addAction(text); a->setCheckable(true); a->setChecked(chk); return a;
-    };
-
-    QMenu *legM = menu.addMenu("Legend");
-    QAction *aTR = addCheck(legM, "Top Right", m_legend.position==Legend::TopRight);
-    QAction *aTP = addCheck(legM, "Top",       m_legend.position==Legend::Top);
-    QAction *aBT = addCheck(legM, "Bottom",    m_legend.position==Legend::Bottom);
-    QAction *aOT = addCheck(legM, "Above Chart", m_legend.position==Legend::AboveChart);
-    QAction *aHD = addCheck(legM, "Hidden",    m_legend.position==Legend::Hidden);
-    QMenu *oriM = menu.addMenu("Layout");
-    QAction *aH = addCheck(oriM, "Horizontal", m_legend.orientation==Legend::Horizontal);
-    QAction *aV = addCheck(oriM, "Vertical",   m_legend.orientation==Legend::Vertical);
-    menu.addSeparator();
-    QMenu *grM = menu.addMenu("Grid");
-    QAction *aYG = addCheck(grM, "Horizontal (Y)", ay && ay->isGridVisible() && ay->isHorizontalGridVisible());
-    QAction *aXG = addCheck(grM, "Vertical (X)",   ax && ax->isGridVisible() && ax->isVerticalGridVisible());
-    menu.addSeparator();
-    menu.addAction("Zoom In",  this, [this](){ zoom(0.7); });
-    menu.addAction("Zoom Out", this, [this](){ zoom(1.4); });
-
-    QAction *ch = menu.exec(e->globalPos());
-    if (!ch) return;
-    if      (ch==aTR) setLegendPosition(Legend::TopRight);
-    else if (ch==aTP) setLegendPosition(Legend::Top);
-    else if (ch==aBT) setLegendPosition(Legend::Bottom);
-    else if (ch==aOT) setLegendPosition(Legend::AboveChart);
-    else if (ch==aHD) setLegendPosition(Legend::Hidden);
-    else if (ch==aH)  setLegendOrientation(Legend::Horizontal);
-    else if (ch==aV)  setLegendOrientation(Legend::Vertical);
-    else if (ch==aYG && ay) { bool on=!ay->isHorizontalGridVisible(); ay->setGridVisible(on); ay->setHorizontalGridVisible(on); markDirty(); }
-    else if (ch==aXG && ax) { bool on=!ax->isVerticalGridVisible(); ax->setGridVisible(on); ax->setVerticalGridVisible(on); markDirty(); }
-}
-
-void ChartWidget::leaveEvent(QEvent *) { m_showTooltip = false; update(); }
-
-// ---- Ã· æøÚ ----
-
-double ChartWidget::pointDist(const QPointF &a, const QPointF &b) const
-{ double dx=a.x()-b.x(), dy=a.y()-b.y(); return std::sqrt(dx*dx+dy*dy); }
-
-void ChartWidget::findNearest(QPoint mousePos)
-{
-    m_showTooltip = false; m_tooltipText.clear();
-    if (!m_tooltipEnabled || !m_layout->plotArea().contains(mousePos)) return;
-
-    double bestDist = 15.0;
-    Series *bestSeries = nullptr;
-    int bestPt=-1, bestCat=-1, bestBar=-1;
+// ------------------------------------------------------------------------
+// Render BarSeries (grouped)
+// ------------------------------------------------------------------------
+void ChartWidget::renderBarSeries(QPainter &p, const QRectF &plotArea) {
+    auto bars = m_model->seriesByType<BarSeries>();
+    if (bars.isEmpty()) return;
 
     QStringList cats = m_model->categories();
-    if (!cats.isEmpty()) {
-        QRectF pa = m_layout->plotArea();
-        double catWidth = pa.width() / double(cats.size());
-        for (int c = 0; c < cats.size(); ++c) {
-            double cx = pa.left() + (double(c)+0.5)*catWidth;
-            if (qAbs(mousePos.x()-cx) >= catWidth*0.45) continue;
-            for (Series *s : m_model->seriesList()) {
-                if (!s->isVisible() || s->type()!=SeriesType::StackedBar) continue;
-                if (c < static_cast<StackedBarSeries*>(s)->dataCount()) {
-                    double d = qAbs(mousePos.x()-cx);
-                    if (d < bestDist) { bestDist=d; bestCat=c; bestSeries=s; bestBar=-2; bestPt=-1; }
+    if (cats.isEmpty()) return;
+
+    int nCats = cats.size();
+    int nBars = bars.size();
+    if (nCats == 0 || nBars == 0) return;
+
+    p.save();
+    p.setClipRect(plotArea);
+
+    double slotW = plotArea.width() / nCats;
+    double totalBarW = slotW * 0.7;
+    double barW = totalBarW / nBars;
+    double baseY = m_yAxis->coordToPixel(0);
+
+    for (int bi = 0; bi < nBars; ++bi) {
+        BarSeries *bs = bars[bi];
+        if (!bs->isVisible()) continue;
+        p.setBrush(bs->color());
+        p.setPen(QPen(bs->color().darker(130), 1));
+
+        for (int ci = 0; ci < nCats && ci < bs->dataCount(); ++ci) {
+            double val = bs->value(ci);
+            double x0 = plotArea.left() + ci * slotW + (slotW - totalBarW) / 2 + bi * barW;
+            double y1 = m_yAxis->coordToPixel(val);
+            double y0 = qMax(baseY, plotArea.top());
+            if (val < 0) {
+                y0 = baseY;
+                y1 = m_yAxis->coordToPixel(val);
+            }
+            QRectF barRect(x0 + 1, qMin(y0, y1), barW - 2, qAbs(y1 - y0));
+            p.drawRect(barRect);
+        }
+    }
+    p.restore();
+}
+
+// ------------------------------------------------------------------------
+// Render StackedBarSeries
+// ------------------------------------------------------------------------
+void ChartWidget::renderStackedBarSeries(QPainter &p, const QRectF &plotArea) {
+    auto stacked = m_model->seriesByType<StackedBarSeries>();
+    if (stacked.isEmpty()) return;
+
+    QStringList cats = m_model->categories();
+    if (cats.isEmpty()) return;
+
+    int nCats = cats.size();
+    int nStacks = stacked.size();
+    if (nCats == 0 || nStacks == 0) return;
+
+    p.save();
+    p.setClipRect(plotArea);
+
+    double slotW = plotArea.width() / nCats;
+    double barW = slotW * 0.7;
+    double baseY = m_yAxis->coordToPixel(0);
+
+    for (int ci = 0; ci < nCats; ++ci) {
+        double cumulativePos = 0;
+        double cumulativeNeg = 0;
+        double x0 = plotArea.left() + ci * slotW + (slotW - barW) / 2;
+
+        for (int si = 0; si < nStacks; ++si) {
+            if (!stacked[si]->isVisible()) continue;
+            if (ci >= stacked[si]->dataCount()) continue;
+
+            double val = stacked[si]->value(ci);
+            double yTop, yBottom;
+            if (val >= 0) {
+                yTop = m_yAxis->coordToPixel(cumulativePos + val);
+                yBottom = m_yAxis->coordToPixel(cumulativePos);
+                cumulativePos += val;
+            } else {
+                yTop = m_yAxis->coordToPixel(cumulativeNeg);
+                yBottom = m_yAxis->coordToPixel(cumulativeNeg + val);
+                cumulativeNeg += val;
+            }
+
+            QRectF barRect(x0 + 1, qMin(yTop, yBottom), barW - 2, qAbs(yBottom - yTop));
+            p.setBrush(stacked[si]->color());
+            p.setPen(QPen(stacked[si]->color().darker(130), 1));
+            p.drawRect(barRect);
+        }
+    }
+    p.restore();
+}
+
+// ------------------------------------------------------------------------
+// Mouse Events
+// ------------------------------------------------------------------------
+void ChartWidget::mouseMoveEvent(QMouseEvent *event) {
+    QPointF pos = event->pos();
+
+    if (m_dragging) {
+        // Drag the plot
+        QPointF delta = pos - m_lastMousePos;
+        auto info = m_layout->calculate(
+            size(), m_model->title(), m_titleFont,
+            m_xAxis, m_yAxis, m_legend, m_model->seriesList());
+        QRectF plotArea = info.chartArea;
+        if (plotArea.isEmpty()) return;
+
+        double dxRange = (m_xAxis->max() - m_xAxis->min()) * (-delta.x() / plotArea.width());
+        double dyRange = (m_yAxis->max() - m_yAxis->min()) * (delta.y() / plotArea.height());
+
+        double xMin = m_dragStartXMin + dxRange;
+        double xMax = m_dragStartXMax + dxRange;
+        double yMin = m_dragStartYMin + dyRange;
+        double yMax = m_dragStartYMax + dyRange;
+
+        m_xAxis->setRange(xMin, xMax);
+        m_yAxis->setRange(yMin, yMax);
+        emit rangeChanged(xMin, xMax, yMin, yMax);
+        m_dirty = true;
+        update();
+    } else {
+        // Hover detection
+        Series *hitSeries = nullptr;
+        int hitIdx = hitTestDataPoint(pos, &hitSeries);
+        if (hitIdx >= 0 && hitSeries) {
+            int si = m_model->seriesList().indexOf(hitSeries);
+            if (si != m_hoveredSeriesIdx || hitIdx != m_hoveredPointIdx) {
+                m_hoveredSeriesIdx = si;
+                m_hoveredPointIdx = hitIdx;
+                m_dirty = true;
+                update();
+
+                // Emit hover signal
+                auto *ls = qobject_cast<LineSeries*>(hitSeries);
+                if (ls && hitIdx < ls->dataCount()) {
+                    const auto &dp = ls->dataAt(hitIdx);
+                    emit dataPointHovered(hitSeries, hitIdx, QPointF(dp.key, dp.value));
                 }
             }
-            QList<BarSeries*> bars;
-            for (Series *s : m_model->seriesList())
-                if (s->isVisible() && s->type()==SeriesType::Bar && !static_cast<BarSeries*>(s)->useXY())
-                    bars.append(static_cast<BarSeries*>(s));
-            if (!bars.isEmpty()) {
-                double groupW = catWidth*bars.first()->barWidthRatio();
-                double singleW = groupW/bars.size();
-                for (int bi=0; bi<bars.size(); ++bi) {
-                    if (c >= bars[bi]->dataCount()) continue;
-                    double barL = cx-groupW/2.0+bi*singleW;
-                    double val = bars[bi]->data().at(c);
-                    QPointF top=m_layout->mapToPixel(0,val), bot=m_layout->mapToPixel(0,qMax(m_layout->yMin(),0.0));
-                    double barT=qMin(top.y(),bot.y()), barB=qMax(top.y(),bot.y());
-                    if (mousePos.x()>=barL && mousePos.x()<=barL+singleW-1 && mousePos.y()>=barT && mousePos.y()<=barB) {
-                        double d = pointDist(mousePos, QPointF(cx,(barT+barB)/2.0));
-                        if (d<bestDist) { bestDist=d; bestCat=c; bestSeries=bars[bi]; bestBar=bi; bestPt=-1; }
-                    }
+        } else {
+            if (m_hoveredSeriesIdx >= 0 || m_hoveredPointIdx >= 0) {
+                m_hoveredSeriesIdx = -1;
+                m_hoveredPointIdx = -1;
+                m_dirty = true;
+                update();
+            }
+        }
+    }
+    m_lastMousePos = pos;
+}
+
+void ChartWidget::mousePressEvent(QMouseEvent *event) {
+    if (event->button() == Qt::LeftButton) {
+        m_dragging = true;
+        m_lastMousePos = event->pos();
+        m_mousePressPos = event->pos();
+        m_dragStartXMin = m_xAxis->min();
+        m_dragStartXMax = m_xAxis->max();
+        m_dragStartYMin = m_yAxis->min();
+        m_dragStartYMax = m_yAxis->max();
+    }
+}
+
+void ChartWidget::mouseReleaseEvent(QMouseEvent *event) {
+    if (event->button() == Qt::LeftButton) {
+        m_dragging = false;
+
+        // Check if it was a click (not drag)
+        if ((event->pos() - m_mousePressPos).manhattanLength() < 5) {
+            Series *hitSeries = nullptr;
+            int hitIdx = hitTestDataPoint(event->pos(), &hitSeries);
+            if (hitIdx >= 0 && hitSeries) {
+                auto *ls = qobject_cast<LineSeries*>(hitSeries);
+                if (ls && hitIdx < ls->dataCount()) {
+                    const auto &dp = ls->dataAt(hitIdx);
+                    emit dataPointClicked(hitSeries, hitIdx, QPointF(dp.key, dp.value));
                 }
             }
-            break;
         }
     }
+}
 
-    for (Series *s : m_model->seriesList()) {
-        if (!s->isVisible() || s->type()!=SeriesType::Line) continue;
-        auto *ls = static_cast<LineSeries*>(s);
-        for (int i=0; i<ls->dataCount(); ++i) {
-            double d = pointDist(mousePos, m_layout->mapToPixel(ls->data()[i].x, ls->data()[i].y));
-            if (d<bestDist) { bestDist=d; bestSeries=s; bestPt=i; bestCat=-1; bestBar=-1; }
-        }
-    }
+void ChartWidget::wheelEvent(QWheelEvent *event) {
+    double factor = (event->angleDelta().y() > 0) ? 0.85 : 1.18;
 
-    for (Series *s : m_model->seriesList()) {
-        if (!s->isVisible() || s->type()!=SeriesType::Bar) continue;
-        auto *bs = static_cast<BarSeries*>(s);
-        if (!bs->useXY()) continue;
-        double barW = m_layout->plotArea().width()*0.03*bs->barWidthRatio();
-        for (int i=0; i<bs->xyData().size(); ++i) {
-            QPointF top=m_layout->mapToPixel(bs->xyData()[i].x, bs->xyData()[i].y);
-            QPointF bot=m_layout->mapToPixel(bs->xyData()[i].x, qMax(m_layout->yMin(),0.0));
-            QRectF r(top.x()-barW/2.0, top.y(), barW, bot.y()-top.y());
-            if (r.adjusted(-4,-4,4,4).contains(mousePos)) {
-                double d = pointDist(mousePos, QPointF(top.x(),(top.y()+bot.y())/2.0));
-                if (d<bestDist) { bestDist=d; bestSeries=s; bestPt=i; bestCat=-1; bestBar=-1; }
+    auto info = m_layout->calculate(
+        size(), m_model->title(), m_titleFont,
+        m_xAxis, m_yAxis, m_legend, m_model->seriesList());
+    QRectF plotArea = info.chartArea;
+    if (plotArea.isEmpty()) return;
+
+    // Zoom around cursor position
+    double mouseX = m_xAxis->pixelToCoord(event->position().x());
+    double mouseY = m_yAxis->pixelToCoord(event->position().y());
+
+    double xMin = mouseX + (m_xAxis->min() - mouseX) * factor;
+    double xMax = mouseX + (m_xAxis->max() - mouseX) * factor;
+    double yMin = mouseY + (m_yAxis->min() - mouseY) * factor;
+    double yMax = mouseY + (m_yAxis->max() - mouseY) * factor;
+
+    m_xAxis->setRange(xMin, xMax);
+    m_yAxis->setRange(yMin, yMax);
+    emit rangeChanged(xMin, xMax, yMin, yMax);
+    m_dirty = true;
+    update();
+}
+
+// ------------------------------------------------------------------------
+// Hit testing ‚Äî find nearest data point (with binary search for sorted data)
+// ------------------------------------------------------------------------
+int ChartWidget::hitTestDataPoint(const QPointF &widgetPos, Series **outSeries) const {
+    *outSeries = nullptr;
+
+    auto info = m_layout->calculate(
+        size(), m_model->title(), m_titleFont,
+        m_xAxis, m_yAxis, m_legend, m_model->seriesList());
+    QRectF plotArea = info.chartArea;
+    if (plotArea.isEmpty()) return -1;
+
+    double threshold = 15.0; // pixel threshold
+
+    for (auto *s : m_model->seriesList()) {
+        if (!s->isVisible()) continue;
+        auto *ls = qobject_cast<LineSeries*>(s);
+        if (!ls) continue;
+
+        const auto &data = ls->allData();
+        int dataSize = data.size();
+        if (dataSize == 0) continue;
+
+        QStringList cats = m_model->categories();
+        bool useCats = !cats.isEmpty();
+
+        // Determine search range
+        int beginIdx = 0, endIdx = dataSize;
+        if (!useCats && dataSize > 100) {
+            double mouseKey = m_xAxis->pixelToCoord(widgetPos.x());
+            double keyRange = (m_xAxis->max() - m_xAxis->min()) * (threshold / plotArea.width());
+            bool sorted = (data.last().key >= data.first().key);
+            if (sorted) {
+                auto lessDP = [](const LineSeries::DataPoint &dp, double key) { return dp.key < key; };
+                auto lessKey = [](double key, const LineSeries::DataPoint &dp) { return key < dp.key; };
+                beginIdx = int(std::lower_bound(data.begin(), data.end(), mouseKey - keyRange, lessDP) - data.begin());
+                endIdx   = int(std::upper_bound(data.begin(), data.end(), mouseKey + keyRange, lessKey) - data.begin());
             }
         }
+
+        double bestDist = threshold;
+        int bestIdx = -1;
+        for (int i = beginIdx; i < endIdx; ++i) {
+            double px = useCats
+                ? plotArea.left() + (qBound(0, int(data[i].key), cats.size() - 1) + 0.5) * (plotArea.width() / cats.size())
+                : m_xAxis->coordToPixel(data[i].key);
+            double py = m_yAxis->coordToPixel(data[i].value);
+            double dist = QLineF(widgetPos, QPointF(px, py)).length();
+            if (dist < bestDist) {
+                bestDist = dist;
+                bestIdx = i;
+            }
+        }
+        if (bestIdx >= 0) {
+            *outSeries = s;
+            return bestIdx;
+        }
     }
-
-    if (!bestSeries) return;
-    m_showTooltip = true; m_mouseScreen = mousePos; m_tooltipColor = bestSeries->color();
-
-    if (bestSeries->type()==SeriesType::StackedBar && bestCat>=0) buildTooltipForStackedBar(bestCat);
-    else if (bestSeries->type()==SeriesType::Bar && bestCat>=0 && bestBar>=0) buildTooltipForBar(bestCat, bestBar);
-    else if (bestSeries->type()==SeriesType::Line && bestPt>=0) buildTooltipForLine(static_cast<LineSeries*>(bestSeries), bestPt);
-
-    emit dataPointHovered(bestSeries, bestPt, QPointF());
-}
-
-void ChartWidget::buildTooltipForLine(LineSeries *ls, int ptIdx)
-{
-    if (ptIdx<0 || ptIdx>=ls->dataCount()) return;
-    const DataPoint &dp = ls->data().at(ptIdx);
-    m_tooltipPos = m_layout->mapToPixel(dp.x, dp.y);
-    m_tooltipText = QString("%1|%2\n#000000|X: %3\n#000000|Y: %4")
-                        .arg(ls->color().name()).arg(ls->name())
-                        .arg(m_layout->formatAxisValue(m_model->axisX(), dp.x))
-                        .arg(dp.y, 0, 'f', 2);
-}
-
-void ChartWidget::buildTooltipForBar(int catIdx, int barIdx)
-{
-    QList<BarSeries*> bars;
-    for (Series *s : m_model->seriesList())
-        if (s->isVisible() && s->type()==SeriesType::Bar && !static_cast<BarSeries*>(s)->useXY())
-            bars.append(static_cast<BarSeries*>(s));
-    if (barIdx<0 || barIdx>=bars.size() || catIdx>=bars[barIdx]->dataCount()) return;
-    BarSeries *bs = bars[barIdx];
-    QString label = m_model->categories().value(catIdx, QString::number(catIdx));
-    m_tooltipText = QString("%1|%2\n#000000|%3: %4")
-                        .arg(bs->color().name()).arg(bs->name()).arg(label).arg(bs->data().at(catIdx), 0, 'f', 2);
-    QRectF pa = m_layout->plotArea();
-    double catWidth = pa.width()/double(m_model->categories().size());
-    m_tooltipPos = QPointF(pa.left()+(double(catIdx)+0.5)*catWidth, m_layout->mapToPixel(0, bs->data().at(catIdx)).y());
-}
-
-void ChartWidget::buildTooltipForStackedBar(int catIdx)
-{
-    QList<StackedBarSeries*> stacked;
-    for (Series *s : m_model->seriesList())
-        if (s->isVisible() && s->type()==SeriesType::StackedBar)
-            stacked.append(static_cast<StackedBarSeries*>(s));
-    QString label = m_model->categories().value(catIdx, QString::number(catIdx));
-    double sum = 0;
-    QStringList lines;
-    lines << QString("#000000|Category: %1").arg(label);
-    for (auto *sb : stacked) {
-        double v = (catIdx<sb->dataCount()) ? sb->data().at(catIdx) : 0;
-        lines << QString("%1|%2: %3").arg(sb->color().name()).arg(sb->name()).arg(v,0,'f',2);
-        sum += v;
-    }
-    lines << QString("#000000|Total: %1").arg(sum,0,'f',2);
-    m_tooltipText = lines.join("\n");
-    QRectF pa = m_layout->plotArea();
-    double catWidth = pa.width()/double(m_model->categories().size());
-    m_tooltipPos = QPointF(pa.left()+(double(catIdx)+0.5)*catWidth, m_layout->mapToPixel(0,sum).y());
+    return -1;
 }

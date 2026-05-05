@@ -7,12 +7,13 @@
 #include <QTimer>
 #include <QStandardPaths>
 #include <QtMath>
+#include <cstdlib>
 
-#include "ChartWidget.h"
+#include "chartwidget.h"
 
-// ========================================================================
+// ------------------------------------------------------------------------
 // 折线图 Demo（展示实时数据 + 填充 + 主题切换）
-// ========================================================================
+// ------------------------------------------------------------------------
 static QWidget* createLineChartDemo(QWidget *parent)
 {
     QWidget *page = new QWidget(parent);
@@ -27,7 +28,7 @@ static QWidget* createLineChartDemo(QWidget *parent)
     layout->addLayout(btnLayout);
 
     ChartWidget *chart = new ChartWidget;
-    //chart->setTitle("Temperature Monitor");
+    chart->setTitle("Temperature Monitor");
     chart->setLegendOrientation(Legend::Vertical); // 使用 Legend::Orientation
 
     // 获取默认轴并进行配置
@@ -140,9 +141,9 @@ static QWidget* createLineChartDemo(QWidget *parent)
     return page;
 }
 
-// ========================================================================
+// ------------------------------------------------------------------------
 // 柱状图 Demo
-// ========================================================================
+// ------------------------------------------------------------------------
 static ChartWidget* createBarChart(QWidget *parent)
 {
     ChartWidget *chart = new ChartWidget(parent);
@@ -164,9 +165,9 @@ static ChartWidget* createBarChart(QWidget *parent)
     return chart;
 }
 
-// ========================================================================
+// ------------------------------------------------------------------------
 // 堆叠柱状图 Demo
-// ========================================================================
+// ------------------------------------------------------------------------
 static ChartWidget* createStackedBarChart(QWidget *parent)
 {
     ChartWidget *chart = new ChartWidget(parent);
@@ -191,9 +192,9 @@ static ChartWidget* createStackedBarChart(QWidget *parent)
     return chart;
 }
 
-// ========================================================================
+// ------------------------------------------------------------------------
 // 混合图 Demo
-// ========================================================================
+// ------------------------------------------------------------------------
 static ChartWidget* createMixedChart(QWidget *parent)
 {
     ChartWidget *chart = new ChartWidget(parent);
@@ -220,9 +221,9 @@ static ChartWidget* createMixedChart(QWidget *parent)
     return chart;
 }
 
-// ========================================================================
+// ------------------------------------------------------------------------
 // 本周日期折线图 Demo（30个随机数据点，X轴为本周7天）
-// ========================================================================
+// ------------------------------------------------------------------------
 static ChartWidget* createWeekLineChart(QWidget *parent)
 {
     ChartWidget *chart = new ChartWidget(parent);
@@ -272,9 +273,39 @@ static ChartWidget* createWeekLineChart(QWidget *parent)
     return chart;
 }
 
-// ========================================================================
+// ------------------------------------------------------------------------
+// 10K 点性能测试 Demo
+// ------------------------------------------------------------------------
+static ChartWidget* createPerfTestChart(QWidget *parent)
+{
+    ChartWidget *chart = new ChartWidget(parent);
+    chart->setTitle("10,000 Points Performance Test");
+    chart->setLegendPosition(Legend::AboveChart);
+
+    Axis *axisX = chart->axisX();
+    axisX->setTitle("X");
+    axisX->setRange(0, 10000);
+
+    Axis *axisY = chart->axisY();
+    axisY->setTitle("Y");
+    axisY->setRange(-10, 10);
+
+    LineSeries *line = new LineSeries("Sine Wave");
+    line->setScatterStyle(ScatterStyle::Circle);
+    line->setMarkerSize(4.0);
+    line->setLineWidth(1.0);
+    line->setColor(QColor(54, 162, 235));
+
+    for (int i = 0; i < 10000; ++i)
+        line->append(double(i), 5.0 * std::sin(i * 0.05) + 2.0 * std::cos(i * 0.013));
+
+    chart->addSeries(line);
+    return chart;
+}
+
+// ------------------------------------------------------------------------
 // 主函数
-// ========================================================================
+// ------------------------------------------------------------------------
 int main(int argc, char *argv[])
 {
     QApplication app(argc, argv);
@@ -290,6 +321,7 @@ int main(int argc, char *argv[])
     tabs->addTab(createStackedBarChart(tabs),  "Stacked Bar");
     tabs->addTab(createMixedChart(tabs),       "Mixed Chart");
     tabs->addTab(createWeekLineChart(tabs),    "Week Line");
+    tabs->addTab(createPerfTestChart(tabs),    "10K Points");
 
     win.setCentralWidget(tabs);
     win.show();
