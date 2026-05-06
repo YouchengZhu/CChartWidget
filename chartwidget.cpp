@@ -70,25 +70,17 @@ void LineSeries::removeAt(int index) {
 BarSeries::BarSeries(const QString &name, QObject *parent)
     : Series(name, parent) {}
 
-void BarSeries::setValue(int index, double value) {
-    if (index >= 0 && index < m_values.size()) {
-        m_values[index] = value;
-        emit dataChanged();
-    }
-}
-
 // ------------------------------------------------------------------------
 // StackedBarSeries
 // ------------------------------------------------------------------------
 StackedBarSeries::StackedBarSeries(const QString &name, QObject *parent)
     : Series(name, parent) {}
 
-void StackedBarSeries::setValue(int index, double value) {
-    if (index >= 0 && index < m_values.size()) {
-        m_values[index] = value;
-        emit dataChanged();
-    }
-}
+// ------------------------------------------------------------------------
+// RangeBarSeries
+// ------------------------------------------------------------------------
+RangeBarSeries::RangeBarSeries(const QString &name, QObject *parent)
+    : Series(name, parent) {}
 
 // ------------------------------------------------------------------------
 // Axis
@@ -656,7 +648,10 @@ void ChartWidget::renderChart(QPainter &p, const QSize &size) {
     // 5. Draw grouped bars
     renderBarSeries(p, plotArea);
 
-    // 6. Draw axes on top
+    // 6. Draw range bars
+    renderRangeBarSeries(p, plotArea);
+
+    // 7. Draw axes on top
     renderAxes(p, plotArea);
 
     // 7. Draw title
@@ -794,23 +789,8 @@ static QVector<QPointF> simplifyPolyline(const QVector<QPointF> &pts, int pixelW
 QVector<QPointF> ChartWidget::generateLineSeriesPixels(
     const QRectF &plotArea,
     const QVector<LineSeries::DataPoint> &data,
-    int dataSize,
-    const QStringList &cats,
-    bool useCats) const
+    int dataSize) const
 {
-    if (useCats) {
-        int nCats = cats.size();
-        double slotW = plotArea.width() / nCats;
-        QVector<QPointF> px;
-        px.reserve(dataSize);
-        for (const auto &dp : data) {
-            int idx = qBound(0, int(dp.key), nCats - 1);
-            px.append(QPointF(plotArea.left() + (idx + 0.5) * slotW,
-                              m_yAxis->coordToPixel(dp.value)));
-        }
-        return px;
-    }
-
     double xMin = m_xAxis->min(), xMax = m_xAxis->max();
     int b = 0, e = dataSize;
     bool sorted = (dataSize < 2 || data.last().key >= data.first().key);
@@ -854,11 +834,9 @@ void ChartWidget::renderLineSeries(QPainter &p, const QRectF &plotArea, LineSeri
 
     const auto &data = series->allData();
     int dataSize = data.size();
-    QStringList cats = m_model->categories();
-    bool useCats = !cats.isEmpty();
 
     // Generate pixel coordinates from visible data range
-    QVector<QPointF> pixels = generateLineSeriesPixels(plotArea, data, dataSize, cats, useCats);
+    QVector<QPointF> pixels = generateLineSeriesPixels(plotArea, data, dataSize);
 
     if (pixels.size() < 1) { p.restore(); return; }
 
@@ -935,9 +913,7 @@ void ChartWidget::renderLineSeries(QPainter &p, const QRectF &plotArea, LineSeri
     if (m_hoveredSeriesIdx >= 0 && m_hoveredPointIdx >= 0) {
         if (qobject_cast<LineSeries*>(m_model->seriesList().value(m_hoveredSeriesIdx)) == series) {
             if (m_hoveredPointIdx >= 0 && m_hoveredPointIdx < dataSize) {
-                double hx = useCats
-                    ? plotArea.left() + (qBound(0, int(data[m_hoveredPointIdx].key), cats.size() - 1) + 0.5) * (plotArea.width() / cats.size())
-                    : m_xAxis->coordToPixel(data[m_hoveredPointIdx].key);
+                double hx = m_xAxis->coordToPixel(data[m_hoveredPointIdx].key);
                 double hy = m_yAxis->coordToPixel(data[m_hoveredPointIdx].value);
                 p.setPen(QPen(Qt::white, 2));
                 p.setBrush(series->color());
@@ -950,80 +926,107 @@ void ChartWidget::renderLineSeries(QPainter &p, const QRectF &plotArea, LineSeri
 }
 
 // ------------------------------------------------------------------------
-// Render BarSeries (grouped)
+// Render BarSeries (grouped by X key using axis transform)
 // ------------------------------------------------------------------------
 void ChartWidget::renderBarSeries(QPainter &p, const QRectF &plotArea) {
     auto bars = m_model->seriesByType<BarSeries>();
     if (bars.isEmpty()) return;
 
-    QStringList cats = m_model->categories();
-    if (cats.isEmpty()) return;
+    // Collect unique sorted keys for bar spacing calculation
+    QVector<double> keys;
+    for (auto *bs : bars) {
+        if (!bs->isVisible()) continue;
+        for (int i = 0; i < bs->dataCount(); ++i)
+            keys.append(bs->dataAt(i).key);
+    }
+    if (keys.isEmpty()) return;
+    std::sort(keys.begin(), keys.end());
+    keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
 
-    int nCats = cats.size();
-    int nBars = bars.size();
-    if (nCats == 0 || nBars == 0) return;
+    int nBars = 0;
+    for (auto *bs : bars) if (bs->isVisible()) ++nBars;
+    if (nBars == 0) return;
 
     p.save();
     p.setClipRect(plotArea);
 
-    double slotW = plotArea.width() / nCats;
-    double totalBarW = slotW * 0.7;
+    // Calculate bar width from minimum key spacing
+    double minKeySpan = keys.size() >= 2 ? (keys[1] - keys[0]) : 1.0;
+    for (int i = 2; i < keys.size(); ++i)
+        minKeySpan = qMin(minKeySpan, keys[i] - keys[i-1]);
+    double totalBarW = qAbs(m_xAxis->coordToPixel(keys.first() + minKeySpan)
+                              - m_xAxis->coordToPixel(keys.first())) * 0.7;
     double barW = totalBarW / nBars;
     double baseY = m_yAxis->coordToPixel(0);
 
-    for (int bi = 0; bi < nBars; ++bi) {
-        BarSeries *bs = bars[bi];
-        if (!bs->isVisible()) continue;
+    int bi = 0;
+    for (auto *bs : bars) {
+        if (!bs->isVisible()) { ++bi; continue; }
         p.setBrush(bs->color());
         p.setPen(QPen(bs->color().darker(130), 1));
 
-        for (int ci = 0; ci < nCats && ci < bs->dataCount(); ++ci) {
-            double val = bs->value(ci);
-            double x0 = plotArea.left() + ci * slotW + (slotW - totalBarW) / 2 + bi * barW;
-            double y1 = m_yAxis->coordToPixel(val);
+        for (int i = 0; i < bs->dataCount(); ++i) {
+            auto dp = bs->dataAt(i);
+            double xCenter = m_xAxis->coordToPixel(dp.key);
+            double x0 = xCenter - totalBarW / 2 + bi * barW;
+            double y1 = m_yAxis->coordToPixel(dp.value);
             double y0 = qMax(baseY, plotArea.top());
-            if (val < 0) {
-                y0 = baseY;
-                y1 = m_yAxis->coordToPixel(val);
-            }
             QRectF barRect(x0 + 1, qMin(y0, y1), barW - 2, qAbs(y1 - y0));
             p.drawRect(barRect);
         }
+        ++bi;
     }
     p.restore();
 }
 
 // ------------------------------------------------------------------------
-// Render StackedBarSeries
+// Render StackedBarSeries (stacked by X key using axis transform)
 // ------------------------------------------------------------------------
 void ChartWidget::renderStackedBarSeries(QPainter &p, const QRectF &plotArea) {
     auto stacked = m_model->seriesByType<StackedBarSeries>();
     if (stacked.isEmpty()) return;
 
-    QStringList cats = m_model->categories();
-    if (cats.isEmpty()) return;
-
-    int nCats = cats.size();
-    int nStacks = stacked.size();
-    if (nCats == 0 || nStacks == 0) return;
+    // Collect unique sorted keys
+    QVector<double> keys;
+    for (auto *ss : stacked) {
+        if (!ss->isVisible()) continue;
+        for (int i = 0; i < ss->dataCount(); ++i)
+            keys.append(ss->dataAt(i).key);
+    }
+    if (keys.isEmpty()) return;
+    std::sort(keys.begin(), keys.end());
+    keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
 
     p.save();
     p.setClipRect(plotArea);
 
-    double slotW = plotArea.width() / nCats;
-    double barW = slotW * 0.7;
+    double minKeySpan = keys.size() >= 2 ? (keys[1] - keys[0]) : 1.0;
+    for (int i = 2; i < keys.size(); ++i)
+        minKeySpan = qMin(minKeySpan, keys[i] - keys[i-1]);
+    double barW = qAbs(m_xAxis->coordToPixel(keys.first() + minKeySpan)
+                        - m_xAxis->coordToPixel(keys.first())) * 0.7;
     double baseY = m_yAxis->coordToPixel(0);
 
-    for (int ci = 0; ci < nCats; ++ci) {
+    for (double key : keys) {
+        double xCenter = m_xAxis->coordToPixel(key);
+        double x0 = xCenter - barW / 2;
         double cumulativePos = 0;
         double cumulativeNeg = 0;
-        double x0 = plotArea.left() + ci * slotW + (slotW - barW) / 2;
 
-        for (int si = 0; si < nStacks; ++si) {
-            if (!stacked[si]->isVisible()) continue;
-            if (ci >= stacked[si]->dataCount()) continue;
+        for (auto *ss : stacked) {
+            if (!ss->isVisible()) continue;
+            // Find data point matching this key
+            double val = 0;
+            bool found = false;
+            for (int i = 0; i < ss->dataCount(); ++i) {
+                if (ss->dataAt(i).key == key) {
+                    val = ss->dataAt(i).value;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) continue;
 
-            double val = stacked[si]->value(ci);
             double yTop, yBottom;
             if (val >= 0) {
                 yTop = m_yAxis->coordToPixel(cumulativePos + val);
@@ -1036,10 +1039,63 @@ void ChartWidget::renderStackedBarSeries(QPainter &p, const QRectF &plotArea) {
             }
 
             QRectF barRect(x0 + 1, qMin(yTop, yBottom), barW - 2, qAbs(yBottom - yTop));
-            p.setBrush(stacked[si]->color());
-            p.setPen(QPen(stacked[si]->color().darker(130), 1));
+            p.setBrush(ss->color());
+            p.setPen(QPen(ss->color().darker(130), 1));
             p.drawRect(barRect);
         }
+    }
+    p.restore();
+}
+
+// ------------------------------------------------------------------------
+// Render RangeBarSeries (min-max range bars positioned by key)
+// ------------------------------------------------------------------------
+void ChartWidget::renderRangeBarSeries(QPainter &p, const QRectF &plotArea) {
+    auto ranges = m_model->seriesByType<RangeBarSeries>();
+    if (ranges.isEmpty()) return;
+
+    // Collect unique sorted keys
+    QVector<double> keys;
+    for (auto *rs : ranges) {
+        if (!rs->isVisible()) continue;
+        for (int i = 0; i < rs->dataCount(); ++i)
+            keys.append(rs->dataAt(i).key);
+    }
+    if (keys.isEmpty()) return;
+    std::sort(keys.begin(), keys.end());
+    keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+
+    int nRanges = 0;
+    for (auto *rs : ranges) if (rs->isVisible()) ++nRanges;
+    if (nRanges == 0) return;
+
+    p.save();
+    p.setClipRect(plotArea);
+
+    double minKeySpan = keys.size() >= 2 ? (keys[1] - keys[0]) : 1.0;
+    for (int i = 2; i < keys.size(); ++i)
+        minKeySpan = qMin(minKeySpan, keys[i] - keys[i-1]);
+    double totalBarW = qAbs(m_xAxis->coordToPixel(keys.first() + minKeySpan)
+                              - m_xAxis->coordToPixel(keys.first())) * 0.7;
+    double barW = totalBarW / nRanges;
+
+    int ri = 0;
+    for (auto *rs : ranges) {
+        if (!rs->isVisible()) { ++ri; continue; }
+        QColor c = rs->color();
+        p.setBrush(c);
+        p.setPen(QPen(c.darker(140), 1));
+
+        for (int i = 0; i < rs->dataCount(); ++i) {
+            auto dp = rs->dataAt(i);
+            double xCenter = m_xAxis->coordToPixel(dp.key);
+            double x0 = xCenter - totalBarW / 2 + ri * barW;
+            double yTop = m_yAxis->coordToPixel(dp.maxValue);
+            double yBottom = m_yAxis->coordToPixel(dp.minValue);
+            QRectF barRect(x0 + 1, qMin(yTop, yBottom), barW - 2, qAbs(yBottom - yTop));
+            p.drawRect(barRect);
+        }
+        ++ri;
     }
     p.restore();
 }
@@ -1070,6 +1126,10 @@ void ChartWidget::mouseMoveEvent(QMouseEvent *event) {
         m_xAxis->setRange(xMin, xMax);
         m_yAxis->setRange(yMin, yMax);
         emit rangeChanged(xMin, xMax, yMin, yMax);
+        m_dragStartXMin = xMin;
+        m_dragStartXMax = xMax;
+        m_dragStartYMin = yMin;
+        m_dragStartYMax = yMax;
         m_dirty = true;
         update();
     } else {
@@ -1182,12 +1242,8 @@ int ChartWidget::hitTestDataPoint(const QPointF &widgetPos, Series **outSeries) 
         int dataSize = data.size();
         if (dataSize == 0) continue;
 
-        QStringList cats = m_model->categories();
-        bool useCats = !cats.isEmpty();
-
-        // Determine search range
         int beginIdx = 0, endIdx = dataSize;
-        if (!useCats && dataSize > 100) {
+        if (dataSize > 100) {
             double mouseKey = m_xAxis->pixelToCoord(widgetPos.x());
             double keyRange = (m_xAxis->max() - m_xAxis->min()) * (threshold / plotArea.width());
             bool sorted = (data.last().key >= data.first().key);
@@ -1202,9 +1258,7 @@ int ChartWidget::hitTestDataPoint(const QPointF &widgetPos, Series **outSeries) 
         double bestDist = threshold;
         int bestIdx = -1;
         for (int i = beginIdx; i < endIdx; ++i) {
-            double px = useCats
-                ? plotArea.left() + (qBound(0, int(data[i].key), cats.size() - 1) + 0.5) * (plotArea.width() / cats.size())
-                : m_xAxis->coordToPixel(data[i].key);
+            double px = m_xAxis->coordToPixel(data[i].key);
             double py = m_yAxis->coordToPixel(data[i].value);
             double dist = QLineF(widgetPos, QPointF(px, py)).length();
             if (dist < bestDist) {

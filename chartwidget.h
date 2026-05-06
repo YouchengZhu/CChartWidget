@@ -198,43 +198,76 @@ private:
 };
 
 // ------------------------------------------------------------------------
-// BarSeries — 柱状图数据系列（分组显示）
+// BarSeries — 柱状图数据系列（分组显示，带 key-value 数据点）
 // ------------------------------------------------------------------------
 class BarSeries : public Series {
     Q_OBJECT
 public:
+    struct DataPoint {
+        double key;
+        double value;
+    };
+
     explicit BarSeries(const QString &name, QObject *parent = nullptr);
 
-    void append(double value) { m_values.append(value); emit dataChanged(); }
-    void setValue(int index, double value);
-    int  dataCount() const override { return m_values.size(); }
-    void clear() override { m_values.clear(); emit dataChanged(); }
+    void append(double key, double value) { m_data.append({key, value}); emit dataChanged(); }
+    int  dataCount() const override { return m_data.size(); }
+    void clear() override { m_data.clear(); emit dataChanged(); }
 
-    double value(int index) const { return m_values.at(index); }
-    const QVector<double> &allValues() const { return m_values; }
+    const DataPoint &dataAt(int index) const { return m_data.at(index); }
+    const QVector<DataPoint> &allData() const { return m_data; }
 
 private:
-    QVector<double> m_values;
+    QVector<DataPoint> m_data;
 };
 
 // ------------------------------------------------------------------------
-// StackedBarSeries — 堆叠柱状图数据系列
+// StackedBarSeries — 堆叠柱状图数据系列（带 key-value 数据点）
 // ------------------------------------------------------------------------
 class StackedBarSeries : public Series {
     Q_OBJECT
 public:
+    struct DataPoint {
+        double key;
+        double value;
+    };
+
     explicit StackedBarSeries(const QString &name, QObject *parent = nullptr);
 
-    void append(double value) { m_values.append(value); emit dataChanged(); }
-    void setValue(int index, double value);
-    int  dataCount() const override { return m_values.size(); }
-    void clear() override { m_values.clear(); emit dataChanged(); }
+    void append(double key, double value) { m_data.append({key, value}); emit dataChanged(); }
+    int  dataCount() const override { return m_data.size(); }
+    void clear() override { m_data.clear(); emit dataChanged(); }
 
-    double value(int index) const { return m_values.at(index); }
-    const QVector<double> &allValues() const { return m_values; }
+    const DataPoint &dataAt(int index) const { return m_data.at(index); }
+    const QVector<DataPoint> &allData() const { return m_data; }
 
 private:
-    QVector<double> m_values;
+    QVector<DataPoint> m_data;
+};
+
+// ------------------------------------------------------------------------
+// RangeBarSeries — 柱状图，每个数据点有最小值/最大值（如温度范围）
+// ------------------------------------------------------------------------
+class RangeBarSeries : public Series {
+    Q_OBJECT
+public:
+    struct DataPoint {
+        double key;
+        double minValue;
+        double maxValue;
+    };
+
+    explicit RangeBarSeries(const QString &name, QObject *parent = nullptr);
+
+    void append(double key, double minValue, double maxValue) { m_data.append({key, minValue, maxValue}); emit dataChanged(); }
+    int  dataCount() const override { return m_data.size(); }
+    void clear() override { m_data.clear(); emit dataChanged(); }
+
+    const DataPoint &dataAt(int index) const { return m_data.at(index); }
+    const QVector<DataPoint> &allData() const { return m_data; }
+
+private:
+    QVector<DataPoint> m_data;
 };
 
 // ------------------------------------------------------------------------
@@ -366,9 +399,6 @@ public:
     void setTitle(const QString &title) { m_title = title; emit titleChanged(); }
     QString title() const { return m_title; }
 
-    void setCategories(const QStringList &cats) { m_categories = cats; emit categoriesChanged(); }
-    QStringList categories() const { return m_categories; }
-
     void setTheme(const ChartTheme &theme);
     ChartTheme theme() const { return m_theme; }
 
@@ -378,7 +408,6 @@ signals:
     void seriesAdded(Series *s);
     void seriesRemoved(Series *s);
     void dataChanged();
-    void categoriesChanged();
     void titleChanged();
     void themeChanged();
 
@@ -388,7 +417,6 @@ private:
     QList<Series*> m_series;
     QList<Axis*>   m_axes;
     QString        m_title;
-    QStringList    m_categories;
     ChartTheme     m_theme;
 };
 
@@ -475,10 +503,6 @@ public:
     void addSeries(Series *series);
     void removeSeries(Series *series);
 
-    // categories (for bar charts)
-    void setCategories(const QStringList &cats) { m_model->setCategories(cats); }
-    QStringList categories() const { return m_model->categories(); }
-
     // legend
     void setLegendOrientation(Legend::Orientation o) { m_legend.orientation = o; }
     void setLegendPosition(Legend::Position p) { m_legend.position = p; }
@@ -522,13 +546,12 @@ private:
     void renderLineSeries(QPainter &p, const QRectF &plotArea, LineSeries *series);
     void renderBarSeries(QPainter &p, const QRectF &plotArea);
     void renderStackedBarSeries(QPainter &p, const QRectF &plotArea);
+    void renderRangeBarSeries(QPainter &p, const QRectF &plotArea);
 
-    // pixel generation helper (extracted from lambda in renderLineSeries)
+    // pixel generation helper
     QVector<QPointF> generateLineSeriesPixels(const QRectF &plotArea,
                                                const QVector<LineSeries::DataPoint> &data,
-                                               int dataSize,
-                                               const QStringList &cats,
-                                               bool useCats) const;
+                                               int dataSize) const;
 
     // mouse helpers
     int hitTestDataPoint(const QPointF &widgetPos, Series **outSeries) const;
