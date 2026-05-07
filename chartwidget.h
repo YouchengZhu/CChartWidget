@@ -136,6 +136,9 @@ public:
     void setVisible(bool visible);
     void setIndex(int idx) { m_index = idx; }
 
+    bool showInLegend() const { return m_showInLegend; }
+    void setShowInLegend(bool show) { m_showInLegend = show; }
+
     virtual int  dataCount() const = 0;
     virtual void clear() = 0;
 
@@ -147,6 +150,7 @@ private:
     QColor  m_color;
     bool    m_visible = true;
     int     m_index   = -1;
+    bool    m_showInLegend = true;
 };
 
 // ------------------------------------------------------------------------
@@ -166,6 +170,7 @@ public:
     void append(double key, double value);
     void append(const QDateTime &time, double value);
     void removeAt(int index);
+    void setData(const QVector<DataPoint> &data) { m_data = data; emit dataChanged(); }
     int  dataCount() const override { return m_data.size(); }
     void clear() override { m_data.clear(); emit dataChanged(); }
 
@@ -211,6 +216,7 @@ public:
     explicit BarSeries(const QString &name, QObject *parent = nullptr);
 
     void append(double key, double value) { m_data.append({key, value}); emit dataChanged(); }
+    void setData(const QVector<DataPoint> &data) { m_data = data; emit dataChanged(); }
     int  dataCount() const override { return m_data.size(); }
     void clear() override { m_data.clear(); emit dataChanged(); }
 
@@ -235,6 +241,7 @@ public:
     explicit StackedBarSeries(const QString &name, QObject *parent = nullptr);
 
     void append(double key, double value) { m_data.append({key, value}); emit dataChanged(); }
+    void setData(const QVector<DataPoint> &data) { m_data = data; emit dataChanged(); }
     int  dataCount() const override { return m_data.size(); }
     void clear() override { m_data.clear(); emit dataChanged(); }
 
@@ -260,6 +267,7 @@ public:
     explicit RangeBarSeries(const QString &name, QObject *parent = nullptr);
 
     void append(double key, double minValue, double maxValue) { m_data.append({key, minValue, maxValue}); emit dataChanged(); }
+    void setData(const QVector<DataPoint> &data) { m_data = data; emit dataChanged(); }
     int  dataCount() const override { return m_data.size(); }
     void clear() override { m_data.clear(); emit dataChanged(); }
 
@@ -502,6 +510,7 @@ public:
     // series
     void addSeries(Series *series);
     void removeSeries(Series *series);
+    void clearSeries();
 
     // legend
     void setLegendOrientation(Legend::Orientation o) { m_legend.orientation = o; }

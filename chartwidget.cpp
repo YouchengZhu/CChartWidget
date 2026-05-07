@@ -473,7 +473,7 @@ QSizeF ChartLayout::measureLegend(const Legend &legend, const QList<Series*> &se
     int itemSpacing = 4;
     int visibleCount = 0;
     for (auto *s : series) {
-        if (!s->isVisible()) continue;
+        if (!s->isVisible() || !s->showInLegend()) continue;
         ++visibleCount;
         double tw = fm.horizontalAdvance(s->name());
         if (tw > maxTextWidth) maxTextWidth = tw;
@@ -572,6 +572,14 @@ void ChartWidget::addSeries(Series *series) {
 
 void ChartWidget::removeSeries(Series *series) {
     m_model->removeSeries(series);
+}
+
+void ChartWidget::clearSeries() {
+    m_model->clearSeries();
+    m_hoveredSeriesIdx = -1;
+    m_hoveredPointIdx = -1;
+    m_dirty = true;
+    update();
 }
 
 void ChartWidget::setTheme(const ChartTheme &theme) {
@@ -704,12 +712,12 @@ void ChartWidget::renderLegend(QPainter &p, const QRectF &rect) {
 
     int visibleCount = 0;
     for (auto *s : series)
-        if (s->isVisible()) ++visibleCount;
+        if (s->isVisible() && s->showInLegend()) ++visibleCount;
 
     if (m_legend.orientation == Legend::Horizontal) {
         int x = x0;
         for (auto *s : series) {
-            if (!s->isVisible()) continue;
+            if (!s->isVisible() || !s->showInLegend()) continue;
             // Icon
             p.fillRect(QRect(x, y0 + 2, iconW, iconW), s->color());
             // Text
@@ -722,7 +730,7 @@ void ChartWidget::renderLegend(QPainter &p, const QRectF &rect) {
     } else {
         int y = y0;
         for (auto *s : series) {
-            if (!s->isVisible()) continue;
+            if (!s->isVisible() || !s->showInLegend()) continue;
             p.fillRect(QRect(x0, y + 2, iconW, iconW), s->color());
             p.setPen(m_legend.textColor);
             QRectF tr(x0 + iconW + spacing, y, rect.right() - x0 - iconW - spacing - 4, fm.height() + 2);
@@ -1097,6 +1105,32 @@ void ChartWidget::renderRangeBarSeries(QPainter &p, const QRectF &plotArea) {
         }
         ++ri;
     }
+    // Hover highlight
+    if (m_hoveredSeriesIdx >= 0 && m_hoveredPointIdx >= 0) {
+        auto *hitSeries = qobject_cast<RangeBarSeries*>(
+            m_model->seriesList().value(m_hoveredSeriesIdx));
+        if (hitSeries && hitSeries->isVisible()
+            && m_hoveredPointIdx < hitSeries->dataCount()) {
+            // Find the bar position & draw highlight border
+            int hitRi = 0;
+            for (auto *rs : ranges) {
+                if (!rs->isVisible()) continue;
+                if (rs == hitSeries) break;
+                ++hitRi;
+            }
+            auto dp = hitSeries->dataAt(m_hoveredPointIdx);
+            double xCenter = m_xAxis->coordToPixel(dp.key);
+            double x0 = xCenter - totalBarW / 2 + hitRi * barW;
+            double yTop = m_yAxis->coordToPixel(dp.maxValue);
+            double yBottom = m_yAxis->coordToPixel(dp.minValue);
+            QRectF barRect(x0 + 1, qMin(yTop, yBottom), barW - 2, qAbs(yBottom - yTop));
+            p.setPen(QPen(Qt::white, 3));
+            p.setBrush(Qt::NoBrush);
+            p.drawRect(barRect);
+            p.setPen(QPen(hitSeries->color().lighter(150), 2));
+            p.drawRect(barRect.adjusted(1, 1, -1, -1));
+        }
+    }
     p.restore();
 }
 
@@ -1145,10 +1179,16 @@ void ChartWidget::mouseMoveEvent(QMouseEvent *event) {
                 update();
 
                 // Emit hover signal
-                auto *ls = qobject_cast<LineSeries*>(hitSeries);
-                if (ls && hitIdx < ls->dataCount()) {
-                    const auto &dp = ls->dataAt(hitIdx);
-                    emit dataPointHovered(hitSeries, hitIdx, QPointF(dp.key, dp.value));
+                if (auto *ls = qobject_cast<LineSeries*>(hitSeries)) {
+                    if (hitIdx < ls->dataCount()) {
+                        const auto &dp = ls->dataAt(hitIdx);
+                        emit dataPointHovered(hitSeries, hitIdx, QPointF(dp.key, dp.value));
+                    }
+                } else if (auto *rs = qobject_cast<RangeBarSeries*>(hitSeries)) {
+                    if (hitIdx < rs->dataCount()) {
+                        const auto &dp = rs->dataAt(hitIdx);
+                        emit dataPointHovered(hitSeries, hitIdx, QPointF(dp.key, dp.maxValue));
+                    }
                 }
             }
         } else {
@@ -1184,10 +1224,16 @@ void ChartWidget::mouseReleaseEvent(QMouseEvent *event) {
             Series *hitSeries = nullptr;
             int hitIdx = hitTestDataPoint(event->pos(), &hitSeries);
             if (hitIdx >= 0 && hitSeries) {
-                auto *ls = qobject_cast<LineSeries*>(hitSeries);
-                if (ls && hitIdx < ls->dataCount()) {
-                    const auto &dp = ls->dataAt(hitIdx);
-                    emit dataPointClicked(hitSeries, hitIdx, QPointF(dp.key, dp.value));
+                if (auto *ls = qobject_cast<LineSeries*>(hitSeries)) {
+                    if (hitIdx < ls->dataCount()) {
+                        const auto &dp = ls->dataAt(hitIdx);
+                        emit dataPointClicked(hitSeries, hitIdx, QPointF(dp.key, dp.value));
+                    }
+                } else if (auto *rs = qobject_cast<RangeBarSeries*>(hitSeries)) {
+                    if (hitIdx < rs->dataCount()) {
+                        const auto &dp = rs->dataAt(hitIdx);
+                        emit dataPointClicked(hitSeries, hitIdx, QPointF(dp.key, dp.maxValue));
+                    }
                 }
             }
         }
@@ -1235,40 +1281,70 @@ int ChartWidget::hitTestDataPoint(const QPointF &widgetPos, Series **outSeries) 
 
     for (auto *s : m_model->seriesList()) {
         if (!s->isVisible()) continue;
-        auto *ls = qobject_cast<LineSeries*>(s);
-        if (!ls) continue;
 
-        const auto &data = ls->allData();
-        int dataSize = data.size();
-        if (dataSize == 0) continue;
+        // LineSeries: nearest-point distance
+        if (auto *ls = qobject_cast<LineSeries*>(s)) {
+            const auto &data = ls->allData();
+            int dataSize = data.size();
+            if (dataSize == 0) continue;
 
-        int beginIdx = 0, endIdx = dataSize;
-        if (dataSize > 100) {
-            double mouseKey = m_xAxis->pixelToCoord(widgetPos.x());
-            double keyRange = (m_xAxis->max() - m_xAxis->min()) * (threshold / plotArea.width());
-            bool sorted = (data.last().key >= data.first().key);
-            if (sorted) {
-                auto lessDP = [](const LineSeries::DataPoint &dp, double key) { return dp.key < key; };
-                auto lessKey = [](double key, const LineSeries::DataPoint &dp) { return key < dp.key; };
-                beginIdx = int(std::lower_bound(data.begin(), data.end(), mouseKey - keyRange, lessDP) - data.begin());
-                endIdx   = int(std::upper_bound(data.begin(), data.end(), mouseKey + keyRange, lessKey) - data.begin());
+            int beginIdx = 0, endIdx = dataSize;
+            if (dataSize > 100) {
+                double mouseKey = m_xAxis->pixelToCoord(widgetPos.x());
+                double keyRange = (m_xAxis->max() - m_xAxis->min()) * (threshold / plotArea.width());
+                bool sorted = (data.last().key >= data.first().key);
+                if (sorted) {
+                    auto lessDP = [](const LineSeries::DataPoint &dp, double key) { return dp.key < key; };
+                    auto lessKey = [](double key, const LineSeries::DataPoint &dp) { return key < dp.key; };
+                    beginIdx = int(std::lower_bound(data.begin(), data.end(), mouseKey - keyRange, lessDP) - data.begin());
+                    endIdx   = int(std::upper_bound(data.begin(), data.end(), mouseKey + keyRange, lessKey) - data.begin());
+                }
             }
+
+            double bestDist = threshold;
+            int bestIdx = -1;
+            for (int i = beginIdx; i < endIdx; ++i) {
+                double px = m_xAxis->coordToPixel(data[i].key);
+                double py = m_yAxis->coordToPixel(data[i].value);
+                double dist = QLineF(widgetPos, QPointF(px, py)).length();
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    bestIdx = i;
+                }
+            }
+            if (bestIdx >= 0) {
+                *outSeries = s;
+                return bestIdx;
+            }
+            continue;
         }
 
-        double bestDist = threshold;
-        int bestIdx = -1;
-        for (int i = beginIdx; i < endIdx; ++i) {
-            double px = m_xAxis->coordToPixel(data[i].key);
-            double py = m_yAxis->coordToPixel(data[i].value);
-            double dist = QLineF(widgetPos, QPointF(px, py)).length();
-            if (dist < bestDist) {
-                bestDist = dist;
-                bestIdx = i;
+        // RangeBarSeries: bar-rect hit test
+        if (auto *rs = qobject_cast<RangeBarSeries*>(s)) {
+            const auto &data = rs->allData();
+            if (data.isEmpty()) continue;
+
+            double barHalfW = 10.0;
+            if (data.size() >= 2) {
+                double pxFirst = m_xAxis->coordToPixel(data.first().key);
+                double pxLast  = m_xAxis->coordToPixel(data.last().key);
+                double pixelSpan = qAbs(pxLast - pxFirst);
+                barHalfW = pixelSpan / data.size() * 0.25;
             }
-        }
-        if (bestIdx >= 0) {
-            *outSeries = s;
-            return bestIdx;
+
+            for (int i = 0; i < data.size(); ++i) {
+                double px = m_xAxis->coordToPixel(data[i].key);
+                double pyMin = m_yAxis->coordToPixel(data[i].minValue);
+                double pyMax = m_yAxis->coordToPixel(data[i].maxValue);
+                QRectF barRect(px - barHalfW, qMin(pyMin, pyMax),
+                               barHalfW * 2, qAbs(pyMax - pyMin));
+                if (barRect.adjusted(-threshold / 2, -threshold / 2,
+                                     threshold / 2, threshold / 2).contains(widgetPos)) {
+                    *outSeries = s;
+                    return i;
+                }
+            }
+            continue;
         }
     }
     return -1;
