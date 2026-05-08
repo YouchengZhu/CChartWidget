@@ -322,6 +322,71 @@ static ChartWidget* createWeekLineChart(QWidget *parent)
 }
 
 // ------------------------------------------------------------------------
+// 组绑定 Demo（5 组 LineSeries + RangeBarSeries，Line 值为范围中点）
+// ------------------------------------------------------------------------
+static ChartWidget* createBindingDemo(QWidget *parent)
+{
+    ChartWidget *chart = new ChartWidget(parent);
+    chart->setTitle("Stock Range (Group Binding Demo)");
+    chart->setLegendPosition(Legend::AboveChart);
+
+    Axis *axisX = chart->axisX();
+    axisX->setType(AxisType::Date);
+    axisX->setDateFormat(DateFormat::MMdd);
+    axisX->setTitle("Date");
+
+    chart->axisY()->setTitle("Price");
+
+    QDate startDate(2026, 5, 1);
+    int days = 7;
+    axisX->setRange(
+        QDateTime(startDate, QTime(0, 0)).toSecsSinceEpoch(),
+        QDateTime(startDate.addDays(days), QTime(0, 0)).toSecsSinceEpoch()
+    );
+
+    struct StockData { double min; double max; };
+    StockData base[] = {
+        {30, 45}, {50, 70}, {18, 28}, {80, 110}, {12, 22}
+    };
+    const char *names[] = {"Stock A", "Stock B", "Stock C", "Stock D", "Stock E"};
+    QColor colors[] = {
+        QColor(54, 162, 235),
+        QColor(255, 99, 132),
+        QColor(75, 192, 192),
+        QColor(255, 159, 64),
+        QColor(153, 102, 255)
+    };
+
+    for (int g = 0; g < 5; ++g) {
+        RangeBarSeries *range = new RangeBarSeries(names[g]);
+        LineSeries *line = new LineSeries(names[g]);
+
+        line->setScatterStyle(ScatterStyle::Circle);
+        line->setMarkerSize(4.0);
+        line->setColor(colors[g]);
+        range->setColor(colors[g]);
+
+        for (int d = 0; d < days; ++d) {
+            double key = QDateTime(startDate.addDays(d), QTime(0, 0)).toSecsSinceEpoch();
+            double minVal = base[g].min + (qrand() % 20) * 0.5;
+            double maxVal = base[g].max + (qrand() % 20) * 0.5;
+            double mid = (minVal + maxVal) / 2.0;
+            range->append(key, qMin(minVal, maxVal), qMax(minVal, maxVal));
+            line->append(key, mid);
+        }
+
+        chart->addSeries(range);
+        chart->addSeries(line);
+
+        int groupId = chart->createSeriesGroup();
+        chart->addSeriesToGroup(groupId, range);
+        chart->addSeriesToGroup(groupId, line);
+    }
+
+    return chart;
+}
+
+// ------------------------------------------------------------------------
 // 10K 点性能测试 Demo
 // ------------------------------------------------------------------------
 static ChartWidget* createPerfTestChart(QWidget *parent)
@@ -370,6 +435,7 @@ int main(int argc, char *argv[])
     tabs->addTab(createRangeBarChart(tabs),    "Range Bar");
     tabs->addTab(createMixedChart(tabs),       "Mixed Chart");
     tabs->addTab(createWeekLineChart(tabs),    "Week Line");
+    tabs->addTab(createBindingDemo(tabs),      "Binding");
     tabs->addTab(createPerfTestChart(tabs),    "10K Points");
 
     win.setCentralWidget(tabs);

@@ -49,12 +49,26 @@ LineSeries::LineSeries(const QString &name, QObject *parent)
     : Series(name, parent) {}
 
 void LineSeries::append(double key, double value) {
-    m_data.append({key, value});
+    if (m_data.isEmpty() || key >= m_data.last().key) {
+        m_data.append({key, value});
+    } else {
+        auto it = std::lower_bound(m_data.begin(), m_data.end(), key,
+            [](const DataPoint &dp, double k) { return dp.key < k; });
+        m_data.insert(it, {key, value});
+    }
     emit dataChanged();
 }
 
 void LineSeries::append(const QDateTime &time, double value) {
     append(time.toSecsSinceEpoch(), value);
+}
+
+void LineSeries::setData(const QVector<DataPoint> &data, bool alreadySorted) {
+    m_data = data;
+    if (!alreadySorted)
+        std::sort(m_data.begin(), m_data.end(),
+            [](const DataPoint &a, const DataPoint &b) { return a.key < b.key; });
+    emit dataChanged();
 }
 
 void LineSeries::removeAt(int index) {
@@ -64,11 +78,42 @@ void LineSeries::removeAt(int index) {
     }
 }
 
+void LineSeries::updateLastValue(double value) {
+    if (m_data.isEmpty()) return;
+    m_data.last().value = value;
+    emit dataChanged();
+}
+
 // ------------------------------------------------------------------------
 // BarSeries
 // ------------------------------------------------------------------------
 BarSeries::BarSeries(const QString &name, QObject *parent)
     : Series(name, parent) {}
+
+void BarSeries::append(double key, double value) {
+    if (m_data.isEmpty() || key >= m_data.last().key) {
+        m_data.append({key, value});
+    } else {
+        auto it = std::lower_bound(m_data.begin(), m_data.end(), key,
+            [](const DataPoint &dp, double k) { return dp.key < k; });
+        m_data.insert(it, {key, value});
+    }
+    emit dataChanged();
+}
+
+void BarSeries::setData(const QVector<DataPoint> &data, bool alreadySorted) {
+    m_data = data;
+    if (!alreadySorted)
+        std::sort(m_data.begin(), m_data.end(),
+            [](const DataPoint &a, const DataPoint &b) { return a.key < b.key; });
+    emit dataChanged();
+}
+
+void BarSeries::updateLastValue(double value) {
+    if (m_data.isEmpty()) return;
+    m_data.last().value = value;
+    emit dataChanged();
+}
 
 // ------------------------------------------------------------------------
 // StackedBarSeries
@@ -76,11 +121,62 @@ BarSeries::BarSeries(const QString &name, QObject *parent)
 StackedBarSeries::StackedBarSeries(const QString &name, QObject *parent)
     : Series(name, parent) {}
 
+void StackedBarSeries::append(double key, double value) {
+    if (m_data.isEmpty() || key >= m_data.last().key) {
+        m_data.append({key, value});
+    } else {
+        auto it = std::lower_bound(m_data.begin(), m_data.end(), key,
+            [](const DataPoint &dp, double k) { return dp.key < k; });
+        m_data.insert(it, {key, value});
+    }
+    emit dataChanged();
+}
+
+void StackedBarSeries::setData(const QVector<DataPoint> &data, bool alreadySorted) {
+    m_data = data;
+    if (!alreadySorted)
+        std::sort(m_data.begin(), m_data.end(),
+            [](const DataPoint &a, const DataPoint &b) { return a.key < b.key; });
+    emit dataChanged();
+}
+
+void StackedBarSeries::updateLastValue(double value) {
+    if (m_data.isEmpty()) return;
+    m_data.last().value = value;
+    emit dataChanged();
+}
+
 // ------------------------------------------------------------------------
 // RangeBarSeries
 // ------------------------------------------------------------------------
 RangeBarSeries::RangeBarSeries(const QString &name, QObject *parent)
     : Series(name, parent) {}
+
+void RangeBarSeries::append(double key, double minValue, double maxValue) {
+    if (m_data.isEmpty() || key >= m_data.last().key) {
+        m_data.append({key, minValue, maxValue});
+    } else {
+        auto it = std::lower_bound(m_data.begin(), m_data.end(), key,
+            [](const DataPoint &dp, double k) { return dp.key < k; });
+        m_data.insert(it, {key, minValue, maxValue});
+    }
+    emit dataChanged();
+}
+
+void RangeBarSeries::setData(const QVector<DataPoint> &data, bool alreadySorted) {
+    m_data = data;
+    if (!alreadySorted)
+        std::sort(m_data.begin(), m_data.end(),
+            [](const DataPoint &a, const DataPoint &b) { return a.key < b.key; });
+    emit dataChanged();
+}
+
+void RangeBarSeries::updateLastValue(double minValue, double maxValue) {
+    if (m_data.isEmpty()) return;
+    m_data.last().minValue = minValue;
+    m_data.last().maxValue = maxValue;
+    emit dataChanged();
+}
 
 // ------------------------------------------------------------------------
 // Axis
@@ -277,6 +373,7 @@ void Axis::drawAxis(QPainter *p) const {
 }
 
 void Axis::drawLabels(QPainter *p) const {
+    if (!m_tickLabelsVisible) return;
     p->save();
     p->setPen(m_tickColor);
     QFont labelFont("Arial", 8);
@@ -578,8 +675,40 @@ void ChartWidget::clearSeries() {
     m_model->clearSeries();
     m_hoveredSeriesIdx = -1;
     m_hoveredPointIdx = -1;
+    m_selectedGroup = -1;
     m_dirty = true;
     update();
+}
+
+int ChartWidget::createSeriesGroup() {
+    m_seriesGroups.append(QList<Series*>());
+    return m_seriesGroups.size() - 1;
+}
+
+void ChartWidget::addSeriesToGroup(int groupId, Series *series) {
+    if (groupId < 0 || groupId >= m_seriesGroups.size() || !series) return;
+    if (!m_seriesGroups[groupId].contains(series))
+        m_seriesGroups[groupId].append(series);
+}
+
+void ChartWidget::clearSeriesGroups() {
+    m_seriesGroups.clear();
+    m_selectedGroup = -1;
+}
+
+bool ChartWidget::isInSelectedGroup(const Series *s) const {
+    if (m_selectedGroup < 0 || m_selectedGroup >= m_seriesGroups.size())
+        return true;
+    for (auto *gs : m_seriesGroups[m_selectedGroup])
+        if (gs == s) return true;
+    return false;
+}
+
+QColor ChartWidget::groupDimColor(const QColor &base) const {
+    if (m_selectedGroup < 0) return base;
+    QColor c = base;
+    c.setAlpha(35);
+    return c;
 }
 
 void ChartWidget::setTheme(const ChartTheme &theme) {
@@ -880,9 +1009,12 @@ void ChartWidget::renderLineSeries(QPainter &p, const QRectF &plotArea, LineSeri
         p.drawPath(fillPath);
     }
 
+    // Dimming for group binding
+    QColor seriesColor = isInSelectedGroup(series) ? series->color() : groupDimColor(series->color());
+
     // 5. Line  single batch drawPolyline
     if (pixels.size() >= 2) {
-        QPen linePen(series->color(), series->lineWidth());
+        QPen linePen(seriesColor, series->lineWidth());
         p.setPen(linePen);
         p.setBrush(Qt::NoBrush);
         p.drawPolyline(pixels);
@@ -891,8 +1023,8 @@ void ChartWidget::renderLineSeries(QPainter &p, const QRectF &plotArea, LineSeri
     // 6. Scatter markers — skip if too dense
     if (series->scatterStyle() != ScatterStyle::None && pixels.size() <= 500) {
         double r = series->markerSize();
-        p.setBrush(series->color());
-        p.setPen(QPen(series->color().darker(120), 1));
+        p.setBrush(seriesColor);
+        p.setPen(QPen(seriesColor.darker(120), 1));
         for (const auto &pt : pixels) {
             switch (series->scatterStyle()) {
             case ScatterStyle::Circle:
@@ -970,8 +1102,9 @@ void ChartWidget::renderBarSeries(QPainter &p, const QRectF &plotArea) {
     int bi = 0;
     for (auto *bs : bars) {
         if (!bs->isVisible()) { ++bi; continue; }
-        p.setBrush(bs->color());
-        p.setPen(QPen(bs->color().darker(130), 1));
+        QColor c = isInSelectedGroup(bs) ? bs->color() : groupDimColor(bs->color());
+        p.setBrush(c);
+        p.setPen(QPen(c.darker(130), 1));
 
         for (int i = 0; i < bs->dataCount(); ++i) {
             auto dp = bs->dataAt(i);
@@ -1047,8 +1180,9 @@ void ChartWidget::renderStackedBarSeries(QPainter &p, const QRectF &plotArea) {
             }
 
             QRectF barRect(x0 + 1, qMin(yTop, yBottom), barW - 2, qAbs(yBottom - yTop));
-            p.setBrush(ss->color());
-            p.setPen(QPen(ss->color().darker(130), 1));
+            QColor c = isInSelectedGroup(ss) ? ss->color() : groupDimColor(ss->color());
+            p.setBrush(c);
+            p.setPen(QPen(c.darker(130), 1));
             p.drawRect(barRect);
         }
     }
@@ -1090,14 +1224,14 @@ void ChartWidget::renderRangeBarSeries(QPainter &p, const QRectF &plotArea) {
     int ri = 0;
     for (auto *rs : ranges) {
         if (!rs->isVisible()) { ++ri; continue; }
-        QColor c = rs->color();
+        QColor c = isInSelectedGroup(rs) ? rs->color() : groupDimColor(rs->color());
         p.setBrush(c);
         p.setPen(QPen(c.darker(140), 1));
 
         for (int i = 0; i < rs->dataCount(); ++i) {
             auto dp = rs->dataAt(i);
             double xCenter = m_xAxis->coordToPixel(dp.key);
-            double x0 = xCenter - totalBarW / 2 + ri * barW;
+            double x0 = xCenter - barW / 2;
             double yTop = m_yAxis->coordToPixel(dp.maxValue);
             double yBottom = m_yAxis->coordToPixel(dp.minValue);
             QRectF barRect(x0 + 1, qMin(yTop, yBottom), barW - 2, qAbs(yBottom - yTop));
@@ -1120,7 +1254,7 @@ void ChartWidget::renderRangeBarSeries(QPainter &p, const QRectF &plotArea) {
             }
             auto dp = hitSeries->dataAt(m_hoveredPointIdx);
             double xCenter = m_xAxis->coordToPixel(dp.key);
-            double x0 = xCenter - totalBarW / 2 + hitRi * barW;
+            double x0 = xCenter - barW / 2;
             double yTop = m_yAxis->coordToPixel(dp.maxValue);
             double yBottom = m_yAxis->coordToPixel(dp.minValue);
             QRectF barRect(x0 + 1, qMin(yTop, yBottom), barW - 2, qAbs(yBottom - yTop));
@@ -1167,9 +1301,10 @@ void ChartWidget::mouseMoveEvent(QMouseEvent *event) {
         m_dirty = true;
         update();
     } else {
-        // Hover detection
+        // Hover detection (respect group binding if active)
         Series *hitSeries = nullptr;
-        int hitIdx = hitTestDataPoint(pos, &hitSeries);
+        int hitIdx = hitTestDataPoint(pos, &hitSeries,
+            m_seriesGroups.isEmpty() ? -1 : m_selectedGroup);
         if (hitIdx >= 0 && hitSeries) {
             int si = m_model->seriesList().indexOf(hitSeries);
             if (si != m_hoveredSeriesIdx || hitIdx != m_hoveredPointIdx) {
@@ -1224,6 +1359,18 @@ void ChartWidget::mouseReleaseEvent(QMouseEvent *event) {
             Series *hitSeries = nullptr;
             int hitIdx = hitTestDataPoint(event->pos(), &hitSeries);
             if (hitIdx >= 0 && hitSeries) {
+                // Group binding: select the group this series belongs to
+                if (!m_seriesGroups.isEmpty()) {
+                    int newGroup = -1;
+                    for (int gi = 0; gi < m_seriesGroups.size(); ++gi)
+                        if (m_seriesGroups[gi].contains(hitSeries))
+                            { newGroup = gi; break; }
+                    if (newGroup != m_selectedGroup) {
+                        m_selectedGroup = newGroup;
+                        m_dirty = true;
+                        update();
+                    }
+                }
                 if (auto *ls = qobject_cast<LineSeries*>(hitSeries)) {
                     if (hitIdx < ls->dataCount()) {
                         const auto &dp = ls->dataAt(hitIdx);
@@ -1235,6 +1382,11 @@ void ChartWidget::mouseReleaseEvent(QMouseEvent *event) {
                         emit dataPointClicked(hitSeries, hitIdx, QPointF(dp.key, dp.maxValue));
                     }
                 }
+            } else if (!m_seriesGroups.isEmpty() && m_selectedGroup >= 0) {
+                // Clicked empty area — deselect group
+                m_selectedGroup = -1;
+                m_dirty = true;
+                update();
             }
         }
     }
@@ -1268,7 +1420,7 @@ void ChartWidget::wheelEvent(QWheelEvent *event) {
 // ------------------------------------------------------------------------
 // Hit testing — find nearest data point (with binary search for sorted data)
 // ------------------------------------------------------------------------
-int ChartWidget::hitTestDataPoint(const QPointF &widgetPos, Series **outSeries) const {
+int ChartWidget::hitTestDataPoint(const QPointF &widgetPos, Series **outSeries, int groupFilter) const {
     *outSeries = nullptr;
 
     auto info = m_layout->calculate(
@@ -1281,6 +1433,13 @@ int ChartWidget::hitTestDataPoint(const QPointF &widgetPos, Series **outSeries) 
 
     for (auto *s : m_model->seriesList()) {
         if (!s->isVisible()) continue;
+        if (groupFilter >= 0) {
+            bool inGroup = false;
+            if (groupFilter < m_seriesGroups.size())
+                for (auto *gs : m_seriesGroups[groupFilter])
+                    if (gs == s) { inGroup = true; break; }
+            if (!inGroup) continue;
+        }
 
         // LineSeries: nearest-point distance
         if (auto *ls = qobject_cast<LineSeries*>(s)) {

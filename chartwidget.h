@@ -170,7 +170,8 @@ public:
     void append(double key, double value);
     void append(const QDateTime &time, double value);
     void removeAt(int index);
-    void setData(const QVector<DataPoint> &data) { m_data = data; emit dataChanged(); }
+    void setData(const QVector<DataPoint> &data, bool alreadySorted = false);
+    void updateLastValue(double value);
     int  dataCount() const override { return m_data.size(); }
     void clear() override { m_data.clear(); emit dataChanged(); }
 
@@ -215,8 +216,9 @@ public:
 
     explicit BarSeries(const QString &name, QObject *parent = nullptr);
 
-    void append(double key, double value) { m_data.append({key, value}); emit dataChanged(); }
-    void setData(const QVector<DataPoint> &data) { m_data = data; emit dataChanged(); }
+    void append(double key, double value);
+    void setData(const QVector<DataPoint> &data, bool alreadySorted = false);
+    void updateLastValue(double value);
     int  dataCount() const override { return m_data.size(); }
     void clear() override { m_data.clear(); emit dataChanged(); }
 
@@ -240,8 +242,9 @@ public:
 
     explicit StackedBarSeries(const QString &name, QObject *parent = nullptr);
 
-    void append(double key, double value) { m_data.append({key, value}); emit dataChanged(); }
-    void setData(const QVector<DataPoint> &data) { m_data = data; emit dataChanged(); }
+    void append(double key, double value);
+    void setData(const QVector<DataPoint> &data, bool alreadySorted = false);
+    void updateLastValue(double value);
     int  dataCount() const override { return m_data.size(); }
     void clear() override { m_data.clear(); emit dataChanged(); }
 
@@ -266,8 +269,9 @@ public:
 
     explicit RangeBarSeries(const QString &name, QObject *parent = nullptr);
 
-    void append(double key, double minValue, double maxValue) { m_data.append({key, minValue, maxValue}); emit dataChanged(); }
-    void setData(const QVector<DataPoint> &data) { m_data = data; emit dataChanged(); }
+    void append(double key, double minValue, double maxValue);
+    void setData(const QVector<DataPoint> &data, bool alreadySorted = false);
+    void updateLastValue(double minValue, double maxValue);
     int  dataCount() const override { return m_data.size(); }
     void clear() override { m_data.clear(); emit dataChanged(); }
 
@@ -324,6 +328,10 @@ public:
     void setGridColor(const QColor &c) { m_gridColor = c; }
     QColor gridColor() const { return m_gridColor; }
 
+    // tick labels visibility
+    void setTickLabelsVisible(bool visible) { m_tickLabelsVisible = visible; }
+    bool tickLabelsVisible() const { return m_tickLabelsVisible; }
+
     // geometry (set by layout)
     void setRect(const QRectF &rect) { m_rect = rect; }
     void setGridRect(const QRectF &rect) { m_gridRect = rect; }
@@ -367,6 +375,7 @@ private:
     QColor   m_subTickColor = QColor(200, 200, 200);
     QColor   m_gridColor    = QColor(210, 210, 210);
     QColor   m_titleColor   = QColor(50, 50, 50);
+    bool     m_tickLabelsVisible = true;
 
     QRectF   m_rect;     // pixel rect for axis labels/ticks
     QRectF   m_gridRect; // pixel rect for grid lines (usually the chart plot area)
@@ -530,6 +539,11 @@ public:
     void setTitleFont(const QFont &f) { m_titleFont = f; }
     QFont titleFont() const { return m_titleFont; }
 
+    // series groups (binding)
+    int  createSeriesGroup();
+    void addSeriesToGroup(int groupId, Series *series);
+    void clearSeriesGroups();
+
 signals:
     void dataPointHovered(Series *series, int index, const QPointF &dataPos);
     void dataPointClicked(Series *series, int index, const QPointF &dataPos);
@@ -563,7 +577,7 @@ private:
                                                int dataSize) const;
 
     // mouse helpers
-    int hitTestDataPoint(const QPointF &widgetPos, Series **outSeries) const;
+    int hitTestDataPoint(const QPointF &widgetPos, Series **outSeries, int groupFilter = -1) const;
 
     // members
     ChartModel  *m_model      = nullptr;
@@ -583,6 +597,13 @@ private:
     double  m_dragStartYMin = 0, m_dragStartYMax = 0;
     int    m_hoveredSeriesIdx = -1;
     int    m_hoveredPointIdx = -1;
+
+    // series groups (for binding interaction)
+    QVector<QList<Series*>> m_seriesGroups;
+    int                     m_selectedGroup = -1;
+
+    bool isInSelectedGroup(const Series *s) const;
+    QColor groupDimColor(const QColor &base) const;
 
     friend class ChartModel;
 };
