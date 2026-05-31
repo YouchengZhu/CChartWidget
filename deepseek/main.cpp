@@ -105,7 +105,7 @@ static AxisRect *createStackedBarDemo()
     auto *xAxis = new DateAxis(BaseAxis::Horizontal);
     xAxis->setRange(start, today);
     xAxis->setTickCount(6);
-    xAxis->setLabelFormat("MM-dd");
+    xAxis->setDateTimeFormat(DateTimeFormat::MMdd);
 
     auto *yAxis = new NumericAxis(BaseAxis::Vertical);
     yAxis->setRange(0, 160);
@@ -216,8 +216,11 @@ static AxisRect *createLargeDataDemo()
 }
 
 // ============================================================================
-// 6. 混合图表 — LineGraph + RangeBarGraph 同框
+// 6. 6条 ComboGraph — 范围柱 + 折线，点击互选
 // ============================================================================
+
+static QVector<ComboGraph<QDate, double> *> g_combos;
+
 static AxisRect *createComboDemo()
 {
     auto *ar = new AxisRect;
@@ -225,55 +228,53 @@ static AxisRect *createComboDemo()
     QDate today = QDate::currentDate();
 
     auto *xAxis = new DateAxis(BaseAxis::Horizontal);
-    xAxis->setRange(today.addDays(-7), today);
+    xAxis->setRange(today.addDays(-6), today);
     xAxis->setTickCount(8);
-    xAxis->setLabelFormat("MM-dd");
+    xAxis->setDateTimeFormat(DateTimeFormat::MMdd);
 
     auto *yAxis = new NumericAxis(BaseAxis::Vertical);
-    yAxis->setRange(-10, 50);
-    yAxis->setTickCount(7);
+    yAxis->setRange(5.0, 55.0);
+    yAxis->setTickCount(5);
+    yAxis->setDecimalPlaces(1);
 
     ar->setXAxis(xAxis);
     ar->setYAxis(yAxis);
 
-    // Range bar (layer 0 — background)
-    auto *rangeBar = new RangeBarGraph<QDate, double>;
-    rangeBar->setName("Low-High");
-    rangeBar->setLayer(0);
-    rangeBar->setBarColor(QColor(200, 200, 220));
-    rangeBar->setBorderColor(QColor(140, 140, 160));
-    rangeBar->setBorderWidth(1.0);
-    rangeBar->setBarWidthFactor(0.45);
+    QVector<QColor> colors = {
+        QColor(70,  130, 180),
+        QColor(220, 60,  60),
+        QColor(50,  180, 80),
+        QColor(240, 150, 30),
+        QColor(140, 60,  200),
+        QColor(20,  160, 180),
+    };
 
-    for (int i = 0; i < 8; ++i) {
-        QDate d = today.addDays(i - 7);
-        double lo = rng(-5, 5);
-        double hi = lo + rng(20, 30);
-        rangeBar->addPoint(d, lo, hi);
+    struct DayData { QDate d; double lo; double hi; };
+    QVector<QVector<DayData>> allDays(6);
+    for (int ci = 0; ci < 6; ++ci) {
+        double base = 10.0 + ci * 5.0;  // each combo in its own Y band
+        for (int i = 0; i < 7; ++i) {
+            QDate d = today.addDays(i - 6);
+            double lo = base + (qrand() % 30) / 10.0;
+            double hi = lo + 4.0 + (qrand() % 80) / 10.0;
+            allDays[ci].append({d, lo, hi});
+        }
     }
 
-    // Line (layer 1 — foreground)
-    auto *line = new LineGraph<QDate, double>;
-    line->setName("Avg Temp");
-    line->setLayer(1);
-    line->setLineColor(QColor(200, 40, 40));
-    line->setLineWidth(2.5);
+    g_combos.clear();
+    for (int ci = 0; ci < 6; ++ci) {
+        auto *combo = new ComboGraph<QDate, double>;
+        combo->setName(QString(char('A' + ci)));
+        combo->setColor(colors[ci]);
+        combo->setLayer(ci);
+        combo->rangeBar()->setBarWidthFactor(0.15);
 
-    ScatterFormat sf;
-    sf.shape = ScatterShape::Circle;
-    sf.size = 9;
-    sf.color = QColor(200, 40, 40);
-    sf.fillColor = Qt::white;
-    sf.borderWidth = 2.5;
-    line->setScatterFormat(sf);
+        for (const auto &dd : allDays[ci])
+            combo->addPoint(dd.d, dd.lo, dd.hi);
 
-    for (int i = 0; i < 8; ++i) {
-        QDate d = today.addDays(i - 7);
-        line->addPoint(d, rng(10, 25));
+        ar->addGraph(combo);
+        g_combos.append(combo);
     }
-
-    ar->addGraph(rangeBar);
-    ar->addGraph(line);
     return ar;
 }
 
@@ -298,7 +299,7 @@ int main(int argc, char *argv[])
         "StackedBarGraph\ndate X · 3-series stacked",
         "RangeBarGraph\ncustom min–max range",
         "Large Data (10k pts)\nadaptive sampling ON",
-        "Combo: RangeBar + Line\ndate X · layered"
+        "Combo: Range+Line\nshared color · mid aligned"
     };
     for (const auto &t : titles) {
         auto *lbl = new QLabel(t);
@@ -319,6 +320,30 @@ int main(int argc, char *argv[])
 
     chartWidget->setChartTable(table);
     chartWidget->invalidateBuffer();
+
+    // Click-to-select: short click on combo chart area selects nearest combo
+    QObject::connect(chartWidget, &ChartWidget::chartClicked,
+                     &window, [chartWidget](QPoint pos) {
+        GridLayoutItem *item = chartWidget->chartTable()->itemAtPos(pos);
+        auto *ar = dynamic_cast<AxisRect *>(item);
+        if (!ar || g_combos.isEmpty()) return;
+
+        QRectF pa = ar->plotArea();
+        double best = std::numeric_limits<double>::max();
+        ComboGraph<QDate, double> *bestCombo = nullptr;
+        for (auto *c : g_combos) {
+            QVariant k, v; double d;
+            if (c->nearestPoint(ar->xAxis(), ar->yAxis(), pa,
+                                QPointF(pos), k, v, d)) {
+                if (d < best && d < 30) { best = d; bestCombo = c; }
+            }
+        }
+        if (bestCombo) {
+            for (auto *c : g_combos)
+                c->setSelected(c == bestCombo);
+            chartWidget->invalidateBuffer();
+        }
+    });
 
     mainLayout->addLayout(labelRow);
     mainLayout->addWidget(chartWidget, 1);

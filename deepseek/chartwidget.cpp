@@ -3,6 +3,44 @@
 #include <QWheelEvent>
 #include <QMouseEvent>
 #include <algorithm>
+#include <cmath>
+
+// ============================================================================
+// AxisRange
+// ============================================================================
+
+void AxisRange::expand(double v)
+{
+    if (v < mLower) mLower = v;
+    if (v > mUpper) mUpper = v;
+}
+
+AxisRange AxisRange::expanded(double v) const
+{
+    AxisRange r = *this;
+    r.expand(v);
+    return r;
+}
+
+AxisRange AxisRange::sanitized(double minRange) const
+{
+    AxisRange r = *this;
+    if (r.size() < minRange) {
+        double mid = r.center();
+        r.mLower = mid - minRange * 0.5;
+        r.mUpper = mid + minRange * 0.5;
+    }
+    return r;
+}
+
+AxisRange AxisRange::bounded(double lo, double hi) const
+{
+    AxisRange r = *this;
+    if (r.mLower < lo) r.mLower = lo;
+    if (r.mUpper > hi) r.mUpper = hi;
+    if (r.mLower > r.mUpper) r.mLower = r.mUpper;
+    return r;
+}
 
 // ============================================================================
 // GridLayoutItem
@@ -43,6 +81,260 @@ void Layer::clearGraphs()
 }
 
 // ============================================================================
+// AxisTicker
+// ============================================================================
+
+double AxisTicker::getMantissa(double input, double *magnitude)
+{
+    const double mag = std::pow(10.0, std::floor(std::log10(input)));
+    if (magnitude) *magnitude = mag;
+    return input / mag;
+}
+
+double AxisTicker::cleanMantissa(double input)
+{
+    double magnitude;
+    const double mantissa = getMantissa(input, &magnitude);
+    return pickClosest(mantissa,
+                       QVector<double>() << 1.0 << 2.0 << 2.5 << 5.0 << 10.0)
+           * magnitude;
+}
+
+double AxisTicker::pickClosest(double target, const QVector<double> &candidates)
+{
+    if (candidates.size() == 1)
+        return candidates.first();
+    auto it = std::lower_bound(candidates.cbegin(), candidates.cend(), target);
+    if (it == candidates.cbegin())
+        return candidates.first();
+    if (it == candidates.cend())
+        return candidates.last();
+    double before = *(it - 1);
+    double after = *it;
+    return (after - target < target - before) ? after : before;
+}
+
+QVector<double> AxisTicker::createTickVector(double tickStep, double rangeMin,
+                                              double rangeMax) const
+{
+    QVector<double> result;
+    qint64 firstStep = qint64(std::floor((rangeMin - m_tickOrigin) / tickStep));
+    qint64 lastStep  = qint64(std::ceil((rangeMax - m_tickOrigin) / tickStep));
+    int tickCount = int(lastStep - firstStep + 1);
+    if (tickCount < 0) tickCount = 0;
+    result.resize(tickCount);
+    for (int i = 0; i < tickCount; ++i)
+        result[i] = m_tickOrigin + (firstStep + i) * tickStep;
+    return result;
+}
+
+int AxisTicker::getSubTickCount(double tickStep) const
+{
+    int result = 1;
+    const double epsilon = 0.01;
+    double intPartf;
+    double fracPart = modf(getMantissa(tickStep), &intPartf);
+    int intPart = int(intPartf);
+
+    if (fracPart < epsilon || 1.0 - fracPart < epsilon) {
+        if (1.0 - fracPart < epsilon) ++intPart;
+        switch (intPart) {
+        case 1: result = 4; break; case 2: result = 3; break;
+        case 3: result = 2; break; case 4: result = 3; break;
+        case 5: result = 4; break; case 6: result = 2; break;
+        case 7: result = 6; break; case 8: result = 3; break;
+        case 9: result = 2; break;
+        }
+    } else if (qAbs(fracPart - 0.5) < epsilon) {
+        switch (intPart) {
+        case 1: result = 2; break; case 2: result = 4; break;
+        case 3: result = 4; break; case 4: result = 2; break;
+        case 5: result = 4; break; case 6: result = 4; break;
+        case 7: result = 2; break; case 8: result = 4; break;
+        case 9: result = 4; break;
+        }
+    }
+    return result;
+}
+
+QVector<double> AxisTicker::createSubTickVector(int subTickCount,
+                                                 const QVector<double> &ticks) const
+{
+    QVector<double> result;
+    if (subTickCount <= 0 || ticks.size() < 2)
+        return result;
+    result.reserve((ticks.size() - 1) * subTickCount);
+    for (int i = 1; i < ticks.size(); ++i) {
+        double subStep = (ticks[i] - ticks[i - 1]) / double(subTickCount + 1);
+        for (int j = 1; j <= subTickCount; ++j)
+            result.append(ticks[i - 1] + subStep * j);
+    }
+    return result;
+}
+
+QVector<QString> AxisTicker::createLabelVector(const QVector<double> &ticks) const
+{
+    QVector<QString> result;
+    result.reserve(ticks.size());
+    for (double t : ticks)
+        result.append(getTickLabel(t));
+    return result;
+}
+
+void AxisTicker::trimTicks(double rangeMin, double rangeMax,
+                           QVector<double> &ticks, bool keepOneOutlier)
+{
+    int lowIdx = -1, highIdx = -1;
+    for (int i = 0; i < ticks.size(); ++i) {
+        if (ticks[i] >= rangeMin) { lowIdx = i; break; }
+    }
+    for (int i = ticks.size() - 1; i >= 0; --i) {
+        if (ticks[i] <= rangeMax) { highIdx = i; break; }
+    }
+    if (lowIdx < 0 || highIdx < 0) {
+        ticks.clear();
+        return;
+    }
+    int front = qMax(0, lowIdx - (keepOneOutlier ? 1 : 0));
+    int back  = qMax(0, ticks.size() - (keepOneOutlier ? 2 : 1) - highIdx);
+    if (front > 0 || back > 0)
+        ticks = ticks.mid(front, ticks.size() - front - back);
+}
+
+QString AxisTicker::getTickLabel(double /*value*/) const
+{
+    return QString::number(0);
+}
+
+// ============================================================================
+// NumericTicker
+// ============================================================================
+
+double NumericTicker::getTickStep(double rangeSize) const
+{
+    double exactStep = rangeSize / double(m_tickCount + 1e-10);
+    return cleanMantissa(exactStep);
+}
+
+int NumericTicker::getSubTickCount(double tickStep) const
+{
+    return AxisTicker::getSubTickCount(tickStep);
+}
+
+QString NumericTicker::getTickLabel(double value) const
+{
+    if (!m_labelFormat.isEmpty())
+        return QString::asprintf(qPrintable(m_labelFormat), value);
+    return QString::number(value, 'f', m_decimalPlaces);
+}
+
+// ============================================================================
+// DateTimeTicker
+// ============================================================================
+
+double DateTimeTicker::getTickStep(double rangeSize) const
+{
+    double result = rangeSize / double(m_tickCount + 1e-10);
+    m_dateStrategy = dsNone;
+
+    if (result < 1.0) {
+        result = cleanMantissa(result);
+    } else if (result < 86400.0 * 30.4375 * 12.0) {
+        result = pickClosest(result, QVector<double>()
+            << 1.0 << 2.5 << 5.0 << 10.0 << 15.0 << 30.0
+            << 60.0 << 2.5*60 << 5*60 << 10*60 << 15*60 << 30*60 << 60*60
+            << 3600.0*2 << 3600.0*3 << 3600.0*6 << 3600.0*12 << 3600.0*24
+            << 86400.0*2 << 86400.0*5 << 86400.0*7 << 86400.0*14
+            << 86400.0*30.4375 << 86400.0*30.4375*2 << 86400.0*30.4375*3
+            << 86400.0*30.4375*6 << 86400.0*30.4375*12);
+        if (result > 86400.0 * 30.4375 - 1.0)
+            m_dateStrategy = dsUniformDayInMonth;
+        else if (result > 3600.0 * 24.0 - 1.0)
+            m_dateStrategy = dsUniformTimeInDay;
+    } else {
+        const double secsPerYear = 86400.0 * 30.4375 * 12.0;
+        result = cleanMantissa(result / secsPerYear) * secsPerYear;
+        m_dateStrategy = dsUniformDayInMonth;
+    }
+    return result;
+}
+
+int DateTimeTicker::getSubTickCount(double tickStep) const
+{
+    int result = AxisTicker::getSubTickCount(tickStep);
+    switch (qRound(tickStep)) {
+    case 5*60: result = 4; break; case 10*60: result = 1; break;
+    case 15*60: result = 2; break; case 30*60: result = 1; break;
+    case 60*60: result = 3; break; case 3600*2: result = 3; break;
+    case 3600*3: result = 2; break; case 3600*6: result = 1; break;
+    case 3600*12: result = 3; break; case 3600*24: result = 3; break;
+    }
+    return result;
+}
+
+QString DateTimeTicker::formatString(DateTimeFormat f)
+{
+    switch (f) {
+    case DateTimeFormat::HHmm:         return "HH:mm";
+    case DateTimeFormat::HHmmss:       return "HH:mm:ss";
+    case DateTimeFormat::MMdd:         return "MM-dd";
+    case DateTimeFormat::MMddHHmm:     return "MM-dd HH:mm";
+    case DateTimeFormat::yyyyMMdd:     return "yyyy-MM-dd";
+    case DateTimeFormat::yyyyMMddHHmm: return "yyyy-MM-dd HH:mm";
+    case DateTimeFormat::yyyyMM:       return "yyyy-MM";
+    case DateTimeFormat::MMMyy:        return "MMM yy";
+    }
+    return "HH:mm";
+}
+
+QString DateTimeTicker::getTickLabel(double value) const
+{
+    QDateTime dt = QDateTime::fromSecsSinceEpoch(qint64(value));
+    return dt.toString(formatString(m_format));
+}
+
+// ============================================================================
+// DateTicker
+// ============================================================================
+
+double DateTicker::getTickStep(double rangeSize) const
+{
+    double result = rangeSize / double(m_tickCount + 1e-10);
+    result = pickClosest(result, QVector<double>()
+        << 1.0 << 2.0 << 5.0 << 7.0 << 10.0 << 14.0 << 15.0 << 21.0
+        << 30.0 << 30.4375 << 30.4375*2 << 30.4375*3 << 30.4375*6
+        << 30.4375*12 << 365.25);
+    return result;
+}
+
+int DateTicker::getSubTickCount(double tickStep) const
+{
+    int result = AxisTicker::getSubTickCount(tickStep);
+    switch (qRound(tickStep)) {
+    case 1: result = 0; break; case 7: result = 6; break;
+    case 14: result = 1; break; case 30: result = 2; break;
+    }
+    return result;
+}
+
+QString DateTicker::formatString(DateTimeFormat f)
+{
+    switch (f) {
+    case DateTimeFormat::yyyyMMdd:     return "yyyy-MM-dd";
+    case DateTimeFormat::MMdd:         return "MM-dd";
+    case DateTimeFormat::yyyyMM:       return "yyyy-MM";
+    case DateTimeFormat::MMMyy:        return "MMM yy";
+    default:                           return "yyyy-MM-dd";
+    }
+}
+
+QString DateTicker::getTickLabel(double value) const
+{
+    QDate d = QDate::fromJulianDay(qint64(value));
+    return d.toString(formatString(m_format));
+}
+
+// ============================================================================
 // BaseAxis
 // ============================================================================
 
@@ -54,26 +346,124 @@ BaseAxis::BaseAxis(AxisOrientation orientation, QObject *parent)
 
 double BaseAxis::niceNumber(double x, bool roundUp) const
 {
-    if (qFuzzyIsNull(x))
-        return 0.0;
-
+    if (qFuzzyIsNull(x)) return 0.0;
     double exponent = qFloor(qLn(x) / qLn(10.0));
     double fraction = x / qPow(10.0, exponent);
-
     double nice;
     if (roundUp) {
-        if (fraction <= 1.0)       nice = 1.0;
-        else if (fraction <= 2.0)  nice = 2.0;
-        else if (fraction <= 5.0)  nice = 5.0;
-        else                       nice = 10.0;
+        if (fraction <= 1.0) nice = 1.0; else if (fraction <= 2.0) nice = 2.0;
+        else if (fraction <= 5.0) nice = 5.0; else nice = 10.0;
     } else {
-        if (fraction < 1.5)        nice = 1.0;
-        else if (fraction < 3.0)   nice = 2.0;
-        else if (fraction < 7.0)   nice = 5.0;
-        else                       nice = 10.0;
+        if (fraction < 1.5) nice = 1.0; else if (fraction < 3.0) nice = 2.0;
+        else if (fraction < 7.0) nice = 5.0; else nice = 10.0;
+    }
+    return nice * qPow(10.0, exponent);
+}
+
+void BaseAxis::setTicker(AxisTicker *ticker)
+{
+    if (m_ownsTicker) delete m_ticker;
+    m_ticker = ticker;
+    m_ownsTicker = true;
+}
+
+void BaseAxis::setTickCount(int count) { if (m_ticker) m_ticker->setTickCount(count); }
+int  BaseAxis::tickCount() const { return m_ticker ? m_ticker->tickCount() : 5; }
+
+void BaseAxis::calculateTicks()
+{
+    if (m_skipTickRecalc && !m_tickPixelPositions.isEmpty())
+        return;  // keep existing positions, they'll be shifted externally
+
+    m_tickValues.clear();
+    m_tickValuesDouble.clear();
+    m_tickPixelPositions.clear();
+    m_subTickPixelPositions.clear();
+    if (!m_ticker) return;
+
+    double min = tickRangeMin();
+    double max = tickRangeMax();
+    if (qFuzzyCompare(min, max)) return;
+
+    double range = max - min;
+    double tickStep = m_ticker->getTickStep(range);
+    QVector<double> ticks = m_ticker->createTickVector(tickStep, min, max);
+    AxisTicker::trimTicks(min, max, ticks, true);
+
+    // Determine pixel bounds for clamping
+    double pixMin = 0.0, pixMax = 0.0;
+    if (m_orientation == Horizontal) {
+        pixMin = m_cachePlotArea.left();
+        pixMax = m_cachePlotArea.right();
+    } else {
+        pixMin = m_cachePlotArea.top();
+        pixMax = m_cachePlotArea.bottom();
     }
 
-    return nice * qPow(10.0, exponent);
+    for (double t : ticks) {
+        m_tickValuesDouble.append(t);
+        m_tickValues.append(tickValueToVariant(t));
+        double pix = valueToPixel(tickValueToVariant(t));
+        pix = qBound(pixMin, pix, pixMax);  // clamp outlier to plot edge
+        m_tickPixelPositions.append(pix);
+    }
+
+    if (m_subTickCount > 0) {
+        int subCnt = m_ticker->getSubTickCount(tickStep);
+        if (subCnt > 0) {
+            QVector<double> subTicks = m_ticker->createSubTickVector(subCnt, ticks);
+            for (double st : subTicks) {
+                double pix = valueToPixel(tickValueToVariant(st));
+                if (pix >= pixMin && pix <= pixMax) // skip sub-ticks fully outside
+                    m_subTickPixelPositions.append(pix);
+            }
+        }
+    }
+}
+
+void BaseAxis::shiftTickPixelPositions(double delta)
+{
+    for (auto &p : m_tickPixelPositions) p += delta;
+    // Sub-ticks during pan: discard. They'll be regenerated on release.
+    m_subTickPixelPositions.clear();
+}
+
+void BaseAxis::drawAxisEnding(QPainter *painter, AxisEnding ending,
+                               const QPointF &pos, double angleDeg) const
+{
+    if (ending == EndingNone) return;
+    double size = m_axisLineWidth * 5.0;
+    painter->save();
+    painter->translate(pos);
+    painter->rotate(angleDeg);
+    QPen p(m_axisColor, m_axisLineWidth);
+    painter->setPen(p);
+    painter->setBrush(m_axisColor);
+
+    if (ending == EndingArrow) {
+        QPointF pts[3] = { {0, 0}, {-size, -size * 0.6}, {-size, size * 0.6} };
+        painter->drawPolygon(pts, 3);
+    } else if (ending == EndingDisc) {
+        painter->drawEllipse(QPointF(0, 0), size * 0.5, size * 0.5);
+    }
+    painter->restore();
+}
+
+void BaseAxis::drawSubTicks(QPainter *painter, const QRectF &plotArea) const
+{
+    if (m_subTickPixelPositions.isEmpty()) return;
+    painter->save();
+    painter->setPen(QPen(m_subTickColor, 1.0));
+    for (double pos : m_subTickPixelPositions) {
+        if (m_orientation == Horizontal) {
+            painter->drawLine(QPointF(pos, plotArea.bottom()),
+                              QPointF(pos, plotArea.bottom() + m_subTickLength));
+        } else {
+            painter->drawLine(QPointF(plotArea.left() - m_subTickLength, pos),
+                              QPointF(plotArea.left(), pos));
+        }
+    }
+    painter->restore();
 }
 
 // ============================================================================
@@ -83,14 +473,40 @@ double BaseAxis::niceNumber(double x, bool roundUp) const
 NumericAxis::NumericAxis(AxisOrientation orientation, QObject *parent)
     : BaseAxis(orientation, parent)
 {
+    setTicker(new NumericTicker);
+}
+
+void NumericAxis::setDecimalPlaces(int places)
+{
+    if (auto *nt = dynamic_cast<NumericTicker *>(m_ticker))
+        nt->setDecimalPlaces(places);
+}
+
+int NumericAxis::decimalPlaces() const
+{
+    if (auto *nt = dynamic_cast<NumericTicker *>(m_ticker))
+        return nt->decimalPlaces();
+    return 0;
+}
+
+void NumericAxis::setLabelFormat(const QString &format)
+{
+    if (auto *nt = dynamic_cast<NumericTicker *>(m_ticker))
+        nt->setLabelFormat(format);
+}
+
+QString NumericAxis::labelFormat() const
+{
+    if (auto *nt = dynamic_cast<NumericTicker *>(m_ticker))
+        return nt->labelFormat();
+    return {};
 }
 
 void NumericAxis::setRange(double min, double max)
 {
-    m_min = qMin(min, max);
-    m_max = qMax(min, max);
-    if (qFuzzyCompare(m_min, m_max))
-        m_max = m_min + 1.0;
+    m_range.set(min, max);
+    if (m_range.isEmpty())
+        m_range.setUpper(m_range.lower() + 1.0);
 }
 
 double NumericAxis::valueToPixel(const QVariant &value) const
@@ -100,16 +516,16 @@ double NumericAxis::valueToPixel(const QVariant &value) const
     if (!ok || m_cachePlotArea.isNull())
         return 0.0;
 
-    double range = m_max - m_min;
-    if (qFuzzyIsNull(range))
+    double r = m_range.size();
+    if (qFuzzyIsNull(r))
         return 0.0;
 
     if (m_orientation == Horizontal) {
         return m_cachePlotArea.left()
-               + (v - m_min) / range * m_cachePlotArea.width();
+               + (v - m_range.lower()) / r * m_cachePlotArea.width();
     } else {
         return m_cachePlotArea.bottom()
-               - (v - m_min) / range * m_cachePlotArea.height();
+               - (v - m_range.lower()) / r * m_cachePlotArea.height();
     }
 }
 
@@ -118,56 +534,17 @@ QVariant NumericAxis::pixelToValue(double pixel) const
     if (m_cachePlotArea.isNull())
         return QVariant(0.0);
 
-    double range = m_max - m_min;
-    if (qFuzzyIsNull(range))
-        return QVariant(m_min);
+    double r = m_range.size();
+    if (qFuzzyIsNull(r))
+        return QVariant(m_range.lower());
 
     if (m_orientation == Horizontal) {
-        return QVariant(m_min + (pixel - m_cachePlotArea.left())
-                        / m_cachePlotArea.width() * range);
+        return QVariant(m_range.lower() + (pixel - m_cachePlotArea.left())
+                        / m_cachePlotArea.width() * r);
     } else {
-        return QVariant(m_min + (m_cachePlotArea.bottom() - pixel)
-                        / m_cachePlotArea.height() * range);
+        return QVariant(m_range.lower() + (m_cachePlotArea.bottom() - pixel)
+                        / m_cachePlotArea.height() * r);
     }
-}
-
-void NumericAxis::calculateTicks()
-{
-    m_tickValues.clear();
-    m_tickPixelPositions.clear();
-
-    if (qFuzzyCompare(m_min, m_max))
-        m_max = m_min + 1.0;
-
-    double range = m_max - m_min;
-    double interval = niceNumber(range / (m_tickCount - 1), true);
-
-    double firstTick = qFloor(m_min / interval) * interval;
-    if (firstTick < m_min)
-        firstTick += interval;
-
-    for (double v = firstTick; v <= m_max + interval * 0.5; v += interval) {
-        m_tickValues.append(QVariant(v));
-        m_tickPixelPositions.append(valueToPixel(QVariant(v)));
-    }
-}
-
-void NumericAxis::setLabelFormat(const QString &format)
-{
-    m_labelFormat = format;
-}
-
-QString NumericAxis::formatTickLabel(const QVariant &value) const
-{
-    bool ok;
-    double v = value.toDouble(&ok);
-    if (!ok)
-        return value.toString();
-
-    if (!m_labelFormat.isEmpty())
-        return QString::asprintf(qPrintable(m_labelFormat), v);
-
-    return QString::number(v, 'f', m_decimalPlaces);
 }
 
 void NumericAxis::draw(QPainter *painter, const QRectF &axisRect,
@@ -191,24 +568,55 @@ void NumericAxis::draw(QPainter *painter, const QRectF &axisRect,
                           QPointF(plotArea.left(), plotArea.bottom()));
     }
 
+    // Draw sub-ticks first (behind main ticks)
+    drawSubTicks(painter, plotArea);
+
     painter->setPen(QPen(m_tickColor, 1.0));
     for (int i = 0; i < m_tickPixelPositions.size(); ++i) {
         double pos = m_tickPixelPositions[i];
         if (m_orientation == Horizontal) {
+            if (pos < plotArea.left() || pos > plotArea.right()) continue;
             painter->drawLine(QPointF(pos, plotArea.bottom()),
                               QPointF(pos, plotArea.bottom() + m_tickLength));
         } else {
+            if (pos < plotArea.top() || pos > plotArea.bottom()) continue;
             painter->drawLine(QPointF(plotArea.left() - m_tickLength, pos),
                               QPointF(plotArea.left(), pos));
         }
     }
 
+    // Axis endings
+    if (m_orientation == Horizontal) {
+        drawAxisEnding(painter, m_lowerEnding,
+                       QPointF(plotArea.left(), plotArea.bottom()), 0.0);
+        drawAxisEnding(painter, m_upperEnding,
+                       QPointF(plotArea.right(), plotArea.bottom()), 180.0);
+    } else {
+        drawAxisEnding(painter, m_lowerEnding,
+                       QPointF(plotArea.left(), plotArea.bottom()), 90.0);
+        drawAxisEnding(painter, m_upperEnding,
+                       QPointF(plotArea.left(), plotArea.top()), -90.0);
+    }
+
     if (m_showTickLabels) {
+        painter->save();
         painter->setPen(QPen(m_labelColor, 1.0));
         painter->setFont(m_labelFont);
+        if (!qFuzzyIsNull(m_tickLabelRotation)) {
+            if (m_orientation == Horizontal) {
+                painter->translate(plotArea.center().x(), plotArea.bottom() + m_tickLength + 2);
+                painter->rotate(m_tickLabelRotation);
+                painter->translate(-plotArea.center().x(), -(plotArea.bottom() + m_tickLength + 2));
+            }
+        }
         for (int i = 0; i < m_tickValues.size(); ++i) {
-            QString label = formatTickLabel(m_tickValues[i]);
             double pos = m_tickPixelPositions[i];
+            if (m_orientation == Horizontal) {
+                if (pos < plotArea.left() || pos > plotArea.right()) continue;
+            } else {
+                if (pos < plotArea.top() || pos > plotArea.bottom()) continue;
+            }
+            QString label = m_ticker ? m_ticker->getTickLabel(m_tickValuesDouble[i]) : QString();
             if (m_orientation == Horizontal) {
                 QRectF textRect(pos - 50, plotArea.bottom() + m_tickLength + 2,
                                 100, 20);
@@ -219,6 +627,7 @@ void NumericAxis::draw(QPainter *painter, const QRectF &axisRect,
                 painter->drawText(textRect, Qt::AlignRight | Qt::AlignVCenter, label);
             }
         }
+        painter->restore();
     }
 
     painter->restore();
@@ -227,8 +636,8 @@ void NumericAxis::draw(QPainter *painter, const QRectF &axisRect,
 void NumericAxis::zoomRange(double factor, const QVariant &center)
 {
     double c = center.toDouble();
-    double newMin = c - (c - m_min) / factor;
-    double newMax = c + (m_max - c) / factor;
+    double newMin = c - (c - m_range.lower()) / factor;
+    double newMax = c + (m_range.upper() - c) / factor;
     if (newMin < newMax && (newMax - newMin) > 1e-10)
         setRange(newMin, newMax);
 }
@@ -237,9 +646,8 @@ void NumericAxis::panRange(double pixelDelta, double plotAreaSize)
 {
     if (qFuzzyIsNull(plotAreaSize))
         return;
-    double range = m_max - m_min;
-    double shift = -pixelDelta / plotAreaSize * range;
-    setRange(m_min + shift, m_max + shift);
+    double shift = -pixelDelta / plotAreaSize * m_range.size();
+    setRange(m_range.lower() + shift, m_range.upper() + shift);
 }
 
 // ============================================================================
@@ -249,21 +657,35 @@ void NumericAxis::panRange(double pixelDelta, double plotAreaSize)
 DateTimeAxis::DateTimeAxis(AxisOrientation orientation, QObject *parent)
     : BaseAxis(orientation, parent)
 {
-    m_min = QDateTime::currentDateTime();
-    m_max = m_min.addSecs(3600);
+    setTicker(new DateTimeTicker);
+    qint64 now = QDateTime::currentDateTime().toSecsSinceEpoch();
+    m_range.set(double(now), double(now + 3600));
 }
+
+QDateTime DateTimeAxis::rangeMin() const { return QDateTime::fromSecsSinceEpoch(qint64(m_range.lower())); }
+QDateTime DateTimeAxis::rangeMax() const { return QDateTime::fromSecsSinceEpoch(qint64(m_range.upper())); }
+QVariant DateTimeAxis::tickValueToVariant(double v) const
+{ return QVariant(QDateTime::fromSecsSinceEpoch(qint64(v))); }
 
 void DateTimeAxis::setRange(const QDateTime &min, const QDateTime &max)
 {
-    m_min = qMin(min, max);
-    m_max = qMax(min, max);
-    if (m_min == m_max)
-        m_max = m_min.addSecs(60);
+    qint64 lo = qMin(min, max).toSecsSinceEpoch();
+    qint64 hi = qMax(min, max).toSecsSinceEpoch();
+    if (lo == hi) hi = lo + 60;
+    m_range.set(double(lo), double(hi));
 }
 
-void DateTimeAxis::setLabelFormat(const QString &format)
+void DateTimeAxis::setDateTimeFormat(DateTimeFormat f)
 {
-    m_labelFormat = format;
+    if (auto *dt = dynamic_cast<DateTimeTicker *>(m_ticker))
+        dt->setDateTimeFormat(f);
+}
+
+DateTimeFormat DateTimeAxis::dateTimeFormat() const
+{
+    if (auto *dt = dynamic_cast<DateTimeTicker *>(m_ticker))
+        return dt->dateTimeFormat();
+    return DateTimeFormat::HHmm;
 }
 
 double DateTimeAxis::valueToPixel(const QVariant &value) const
@@ -272,18 +694,16 @@ double DateTimeAxis::valueToPixel(const QVariant &value) const
     if (!dt.isValid() || m_cachePlotArea.isNull())
         return 0.0;
 
-    qint64 range = m_min.secsTo(m_max);
-    if (range == 0)
-        return 0.0;
-
-    qint64 pos = m_min.secsTo(dt);
+    double r = m_range.size();
+    if (qFuzzyIsNull(r)) return 0.0;
+    double v = static_cast<double>(dt.toSecsSinceEpoch());
 
     if (m_orientation == Horizontal) {
         return m_cachePlotArea.left()
-               + static_cast<double>(pos) / range * m_cachePlotArea.width();
+               + (v - m_range.lower()) / r * m_cachePlotArea.width();
     } else {
         return m_cachePlotArea.bottom()
-               - static_cast<double>(pos) / range * m_cachePlotArea.height();
+               - (v - m_range.lower()) / r * m_cachePlotArea.height();
     }
 }
 
@@ -292,9 +712,9 @@ QVariant DateTimeAxis::pixelToValue(double pixel) const
     if (m_cachePlotArea.isNull())
         return QVariant();
 
-    qint64 range = m_min.secsTo(m_max);
-    if (range == 0)
-        return QVariant(m_min);
+    double r = m_range.size();
+    if (qFuzzyIsNull(r))
+        return QVariant(rangeMin());
 
     double fraction;
     if (m_orientation == Horizontal) {
@@ -303,60 +723,8 @@ QVariant DateTimeAxis::pixelToValue(double pixel) const
         fraction = (m_cachePlotArea.bottom() - pixel) / m_cachePlotArea.height();
     }
 
-    return QVariant(m_min.addSecs(static_cast<qint64>(fraction * range)));
-}
-
-qint64 DateTimeAxis::niceInterval(qint64 rangeSecs) const
-{
-    if (rangeSecs <= 0)
-        return 60;
-
-    QVector<qint64> candidates = {
-        1, 5, 10, 15, 30,
-        60, 120, 300, 600, 900, 1800,
-        3600, 7200, 14400, 21600, 43200, 86400
-    };
-
-    qint64 rough = rangeSecs / (m_tickCount - 1);
-
-    for (qint64 c : candidates) {
-        if (c >= rough)
-            return c;
-    }
-    return candidates.last();
-}
-
-void DateTimeAxis::calculateTicks()
-{
-    m_tickValues.clear();
-    m_tickPixelPositions.clear();
-
-    qint64 range = m_min.secsTo(m_max);
-    if (range <= 0)
-        range = 60;
-
-    qint64 interval = niceInterval(range);
-
-    qint64 startSecs = m_min.toSecsSinceEpoch();
-    qint64 firstTick = (startSecs / interval) * interval;
-    if (firstTick < startSecs)
-        firstTick += interval;
-
-    qint64 endSecs = m_max.toSecsSinceEpoch();
-    for (qint64 s = firstTick; s <= endSecs + interval / 2; s += interval) {
-        QDateTime tickTime = QDateTime::fromSecsSinceEpoch(s);
-        m_tickValues.append(QVariant(tickTime));
-        m_tickPixelPositions.append(valueToPixel(QVariant(tickTime)));
-    }
-}
-
-QString DateTimeAxis::formatTickLabel(const QVariant &value) const
-{
-    QDateTime dt = value.toDateTime();
-    if (!dt.isValid())
-        return value.toString();
-
-    return dt.toString(m_labelFormat);
+    return QVariant(QDateTime::fromSecsSinceEpoch(
+        qint64(m_range.lower() + fraction * r)));
 }
 
 void DateTimeAxis::draw(QPainter *painter, const QRectF &axisRect,
@@ -375,30 +743,50 @@ void DateTimeAxis::draw(QPainter *painter, const QRectF &axisRect,
     if (m_orientation == Horizontal) {
         painter->drawLine(QPointF(plotArea.left(), plotArea.bottom()),
                           QPointF(plotArea.right(), plotArea.bottom()));
+        drawAxisEnding(painter, m_lowerEnding, QPointF(plotArea.left(), plotArea.bottom()), 0.0);
+        drawAxisEnding(painter, m_upperEnding, QPointF(plotArea.right(), plotArea.bottom()), 180.0);
     } else {
         painter->drawLine(QPointF(plotArea.left(), plotArea.top()),
                           QPointF(plotArea.left(), plotArea.bottom()));
+        drawAxisEnding(painter, m_lowerEnding, QPointF(plotArea.left(), plotArea.bottom()), 90.0);
+        drawAxisEnding(painter, m_upperEnding, QPointF(plotArea.left(), plotArea.top()), -90.0);
     }
+
+    // Draw sub-ticks
+    drawSubTicks(painter, plotArea);
 
     painter->setPen(QPen(m_tickColor, 1.0));
     for (int i = 0; i < m_tickPixelPositions.size(); ++i) {
         double pos = m_tickPixelPositions[i];
         if (m_orientation == Horizontal) {
+            if (pos < plotArea.left() || pos > plotArea.right()) continue;
             painter->drawLine(QPointF(pos, plotArea.bottom()),
                               QPointF(pos, plotArea.bottom() + m_tickLength));
         } else {
+            if (pos < plotArea.top() || pos > plotArea.bottom()) continue;
             painter->drawLine(QPointF(plotArea.left() - m_tickLength, pos),
                               QPointF(plotArea.left(), pos));
         }
     }
 
     if (m_showTickLabels) {
+        painter->save();
         painter->setPen(QPen(m_labelColor, 1.0));
         painter->setFont(m_labelFont);
+        if (!qFuzzyIsNull(m_tickLabelRotation) && m_orientation == Horizontal) {
+            painter->translate(plotArea.center().x(), plotArea.bottom() + m_tickLength + 2);
+            painter->rotate(m_tickLabelRotation);
+            painter->translate(-plotArea.center().x(), -(plotArea.bottom() + m_tickLength + 2));
+        }
         double labelWidth = (m_orientation == Horizontal) ? 120.0 : 55.0;
         for (int i = 0; i < m_tickValues.size(); ++i) {
-            QString label = formatTickLabel(m_tickValues[i]);
             double pos = m_tickPixelPositions[i];
+            if (m_orientation == Horizontal) {
+                if (pos < plotArea.left() || pos > plotArea.right()) continue;
+            } else {
+                if (pos < plotArea.top() || pos > plotArea.bottom()) continue;
+            }
+            QString label = m_ticker ? m_ticker->getTickLabel(m_tickValuesDouble[i]) : QString();
             if (m_orientation == Horizontal) {
                 QRectF textRect(pos - labelWidth / 2.0,
                                 plotArea.bottom() + m_tickLength + 2,
@@ -410,6 +798,7 @@ void DateTimeAxis::draw(QPainter *painter, const QRectF &axisRect,
                 painter->drawText(textRect, Qt::AlignRight | Qt::AlignVCenter, label);
             }
         }
+        painter->restore();
     }
 
     painter->restore();
@@ -420,20 +809,13 @@ void DateTimeAxis::zoomRange(double factor, const QVariant &center)
     QDateTime c = center.toDateTime();
     if (!c.isValid()) return;
 
-    qint64 minSecs = m_min.toSecsSinceEpoch();
-    qint64 maxSecs = m_max.toSecsSinceEpoch();
-    qint64 centerSecs = c.toSecsSinceEpoch();
+    double centerSecs = static_cast<double>(c.toSecsSinceEpoch());
+    double dMin = (centerSecs - m_range.lower()) / factor;
+    double dMax = (m_range.upper() - centerSecs) / factor;
 
-    double dMin = static_cast<double>(centerSecs - minSecs) / factor;
-    double dMax = static_cast<double>(maxSecs - centerSecs) / factor;
-
-    qint64 newMin = centerSecs - qMax(static_cast<qint64>(qRound(dMin)), qint64(0));
-    qint64 newMax = centerSecs + qMax(static_cast<qint64>(qRound(dMax)), qint64(0));
-
-    if (newMin >= newMax) {
-        newMin = centerSecs;
-        newMax = centerSecs + 1;
-    }
+    qint64 newMin = qint64(centerSecs) - qMax(qint64(qRound(dMin)), qint64(0));
+    qint64 newMax = qint64(centerSecs) + qMax(qint64(qRound(dMax)), qint64(0));
+    if (newMin >= newMax) { newMin = qint64(centerSecs); newMax = newMin + 1; }
 
     setRange(QDateTime::fromSecsSinceEpoch(newMin),
              QDateTime::fromSecsSinceEpoch(newMax));
@@ -441,14 +823,14 @@ void DateTimeAxis::zoomRange(double factor, const QVariant &center)
 
 void DateTimeAxis::panRange(double pixelDelta, double plotAreaSize)
 {
-    if (qFuzzyIsNull(plotAreaSize))
-        return;
-    qint64 range = m_min.secsTo(m_max);
-    m_panRemainder += -pixelDelta / plotAreaSize * range;
+    if (qFuzzyIsNull(plotAreaSize)) return;
+    m_panRemainder += -pixelDelta / plotAreaSize * m_range.size();
     qint64 shift = static_cast<qint64>(m_panRemainder);
     if (shift != 0) {
         m_panRemainder -= shift;
-        setRange(m_min.addSecs(shift), m_max.addSecs(shift));
+        double s = static_cast<double>(shift);
+        setRange(QDateTime::fromSecsSinceEpoch(qint64(m_range.lower() + s)),
+                 QDateTime::fromSecsSinceEpoch(qint64(m_range.upper() + s)));
     }
 }
 
@@ -459,21 +841,35 @@ void DateTimeAxis::panRange(double pixelDelta, double plotAreaSize)
 DateAxis::DateAxis(AxisOrientation orientation, QObject *parent)
     : BaseAxis(orientation, parent)
 {
-    m_min = QDate::currentDate();
-    m_max = m_min.addDays(30);
+    setTicker(new DateTicker);
+    qint64 today = QDate::currentDate().toJulianDay();
+    m_range.set(double(today), double(today + 30));
 }
+
+QDate DateAxis::rangeMin() const { return QDate::fromJulianDay(qint64(m_range.lower())); }
+QDate DateAxis::rangeMax() const { return QDate::fromJulianDay(qint64(m_range.upper())); }
+QVariant DateAxis::tickValueToVariant(double v) const
+{ return QVariant(QDate::fromJulianDay(qint64(v))); }
 
 void DateAxis::setRange(const QDate &min, const QDate &max)
 {
-    m_min = qMin(min, max);
-    m_max = qMax(min, max);
-    if (m_min == m_max)
-        m_max = m_min.addDays(1);
+    qint64 lo = qMin(min, max).toJulianDay();
+    qint64 hi = qMax(min, max).toJulianDay();
+    if (lo == hi) hi = lo + 1;
+    m_range.set(double(lo), double(hi));
 }
 
-void DateAxis::setLabelFormat(const QString &format)
+void DateAxis::setDateTimeFormat(DateTimeFormat f)
 {
-    m_labelFormat = format;
+    if (auto *dt = dynamic_cast<DateTicker *>(m_ticker))
+        dt->setDateTimeFormat(f);
+}
+
+DateTimeFormat DateAxis::dateTimeFormat() const
+{
+    if (auto *dt = dynamic_cast<DateTicker *>(m_ticker))
+        return dt->dateTimeFormat();
+    return DateTimeFormat::yyyyMMdd;
 }
 
 double DateAxis::valueToPixel(const QVariant &value) const
@@ -482,18 +878,16 @@ double DateAxis::valueToPixel(const QVariant &value) const
     if (!d.isValid() || m_cachePlotArea.isNull())
         return 0.0;
 
-    qint64 range = m_min.daysTo(m_max);
-    if (range == 0)
-        return 0.0;
-
-    qint64 pos = m_min.daysTo(d);
+    double r = m_range.size();
+    if (qFuzzyIsNull(r)) return 0.0;
+    double v = static_cast<double>(d.toJulianDay());
 
     if (m_orientation == Horizontal) {
         return m_cachePlotArea.left()
-               + static_cast<double>(pos) / range * m_cachePlotArea.width();
+               + (v - m_range.lower()) / r * m_cachePlotArea.width();
     } else {
         return m_cachePlotArea.bottom()
-               - static_cast<double>(pos) / range * m_cachePlotArea.height();
+               - (v - m_range.lower()) / r * m_cachePlotArea.height();
     }
 }
 
@@ -502,9 +896,9 @@ QVariant DateAxis::pixelToValue(double pixel) const
     if (m_cachePlotArea.isNull())
         return QVariant();
 
-    qint64 range = m_min.daysTo(m_max);
-    if (range == 0)
-        return QVariant(m_min);
+    double r = m_range.size();
+    if (qFuzzyIsNull(r))
+        return QVariant(rangeMin());
 
     double fraction;
     if (m_orientation == Horizontal) {
@@ -513,58 +907,7 @@ QVariant DateAxis::pixelToValue(double pixel) const
         fraction = (m_cachePlotArea.bottom() - pixel) / m_cachePlotArea.height();
     }
 
-    return QVariant(m_min.addDays(static_cast<qint64>(fraction * range)));
-}
-
-qint64 DateAxis::niceInterval(qint64 rangeDays) const
-{
-    if (rangeDays <= 0)
-        return 1;
-
-    QVector<qint64> candidates = {
-        1, 2, 5, 7, 10, 14, 15, 21, 30, 60, 90, 120, 180, 365
-    };
-
-    qint64 rough = rangeDays / (m_tickCount - 1);
-
-    for (qint64 c : candidates) {
-        if (c >= rough)
-            return c;
-    }
-    return candidates.last();
-}
-
-void DateAxis::calculateTicks()
-{
-    m_tickValues.clear();
-    m_tickPixelPositions.clear();
-
-    qint64 range = m_min.daysTo(m_max);
-    if (range <= 0)
-        range = 1;
-
-    qint64 interval = niceInterval(range);
-    qint64 epochStart = m_min.toJulianDay();
-    qint64 epochEnd = m_max.toJulianDay();
-
-    qint64 firstTick = (epochStart / interval) * interval;
-    if (firstTick < epochStart)
-        firstTick += interval;
-
-    for (qint64 jd = firstTick; jd <= epochEnd + interval / 2; jd += interval) {
-        QDate tickDate = QDate::fromJulianDay(jd);
-        m_tickValues.append(QVariant(tickDate));
-        m_tickPixelPositions.append(valueToPixel(QVariant(tickDate)));
-    }
-}
-
-QString DateAxis::formatTickLabel(const QVariant &value) const
-{
-    QDate d = value.toDate();
-    if (!d.isValid())
-        return value.toString();
-
-    return d.toString(m_labelFormat);
+    return QVariant(QDate::fromJulianDay(qint64(m_range.lower() + fraction * r)));
 }
 
 void DateAxis::draw(QPainter *painter, const QRectF &axisRect,
@@ -583,10 +926,17 @@ void DateAxis::draw(QPainter *painter, const QRectF &axisRect,
     if (m_orientation == Horizontal) {
         painter->drawLine(QPointF(plotArea.left(), plotArea.bottom()),
                           QPointF(plotArea.right(), plotArea.bottom()));
+        drawAxisEnding(painter, m_lowerEnding, QPointF(plotArea.left(), plotArea.bottom()), 0.0);
+        drawAxisEnding(painter, m_upperEnding, QPointF(plotArea.right(), plotArea.bottom()), 180.0);
     } else {
         painter->drawLine(QPointF(plotArea.left(), plotArea.top()),
                           QPointF(plotArea.left(), plotArea.bottom()));
+        drawAxisEnding(painter, m_lowerEnding, QPointF(plotArea.left(), plotArea.bottom()), 90.0);
+        drawAxisEnding(painter, m_upperEnding, QPointF(plotArea.left(), plotArea.top()), -90.0);
     }
+
+    // Draw sub-ticks
+    drawSubTicks(painter, plotArea);
 
     painter->setPen(QPen(m_tickColor, 1.0));
     for (int i = 0; i < m_tickPixelPositions.size(); ++i) {
@@ -601,12 +951,23 @@ void DateAxis::draw(QPainter *painter, const QRectF &axisRect,
     }
 
     if (m_showTickLabels) {
+        painter->save();
         painter->setPen(QPen(m_labelColor, 1.0));
         painter->setFont(m_labelFont);
+        if (!qFuzzyIsNull(m_tickLabelRotation) && m_orientation == Horizontal) {
+            painter->translate(plotArea.center().x(), plotArea.bottom() + m_tickLength + 2);
+            painter->rotate(m_tickLabelRotation);
+            painter->translate(-plotArea.center().x(), -(plotArea.bottom() + m_tickLength + 2));
+        }
         double labelWidth = (m_orientation == Horizontal) ? 120.0 : 60.0;
         for (int i = 0; i < m_tickValues.size(); ++i) {
-            QString label = formatTickLabel(m_tickValues[i]);
             double pos = m_tickPixelPositions[i];
+            if (m_orientation == Horizontal) {
+                if (pos < plotArea.left() || pos > plotArea.right()) continue;
+            } else {
+                if (pos < plotArea.top() || pos > plotArea.bottom()) continue;
+            }
+            QString label = m_ticker ? m_ticker->getTickLabel(m_tickValuesDouble[i]) : QString();
             if (m_orientation == Horizontal) {
                 QRectF textRect(pos - labelWidth / 2.0,
                                 plotArea.bottom() + m_tickLength + 2,
@@ -618,6 +979,7 @@ void DateAxis::draw(QPainter *painter, const QRectF &axisRect,
                 painter->drawText(textRect, Qt::AlignRight | Qt::AlignVCenter, label);
             }
         }
+        painter->restore(); // end rotation save
     }
 
     painter->restore();
@@ -628,34 +990,27 @@ void DateAxis::zoomRange(double factor, const QVariant &center)
     QDate c = center.toDate();
     if (!c.isValid()) return;
 
-    qint64 minJD = m_min.toJulianDay();
-    qint64 maxJD = m_max.toJulianDay();
-    qint64 centerJD = c.toJulianDay();
+    double centerJD = static_cast<double>(c.toJulianDay());
+    double dMin = (centerJD - m_range.lower()) / factor;
+    double dMax = (m_range.upper() - centerJD) / factor;
 
-    double dMin = static_cast<double>(centerJD - minJD) / factor;
-    double dMax = static_cast<double>(maxJD - centerJD) / factor;
-
-    qint64 newMin = centerJD - qMax(static_cast<qint64>(qRound(dMin)), qint64(0));
-    qint64 newMax = centerJD + qMax(static_cast<qint64>(qRound(dMax)), qint64(0));
-
-    if (newMin >= newMax) {
-        newMin = centerJD;
-        newMax = centerJD + 1;
-    }
+    qint64 newMin = qint64(centerJD) - qMax(qint64(qRound(dMin)), qint64(0));
+    qint64 newMax = qint64(centerJD) + qMax(qint64(qRound(dMax)), qint64(0));
+    if (newMin >= newMax) { newMin = qint64(centerJD); newMax = newMin + 1; }
 
     setRange(QDate::fromJulianDay(newMin), QDate::fromJulianDay(newMax));
 }
 
 void DateAxis::panRange(double pixelDelta, double plotAreaSize)
 {
-    if (qFuzzyIsNull(plotAreaSize))
-        return;
-    qint64 range = m_min.daysTo(m_max);
-    m_panRemainder += -pixelDelta / plotAreaSize * range;
+    if (qFuzzyIsNull(plotAreaSize)) return;
+    m_panRemainder += -pixelDelta / plotAreaSize * m_range.size();
     qint64 shift = static_cast<qint64>(m_panRemainder);
     if (shift != 0) {
         m_panRemainder -= shift;
-        setRange(m_min.addDays(shift), m_max.addDays(shift));
+        double s = static_cast<double>(shift);
+        setRange(QDate::fromJulianDay(qint64(m_range.lower() + s)),
+                 QDate::fromJulianDay(qint64(m_range.upper() + s)));
     }
 }
 
@@ -1017,6 +1372,10 @@ void ChartWidget::mousePressEvent(QMouseEvent *event)
             m_panLastPos = event->pos();
             m_panAxisRect = ar;
 
+            // Lock tick positions during pan to avoid jumpy origin alignment
+            if (ar->xAxis()) ar->xAxis()->setSkipTickRecalc(true);
+            if (ar->yAxis()) ar->yAxis()->setSkipTickRecalc(true);
+
             if (auto *dta = dynamic_cast<DateTimeAxis *>(ar->xAxis()))
                 dta->resetPanRemainder();
             if (auto *da = dynamic_cast<DateAxis *>(ar->xAxis()))
@@ -1040,6 +1399,19 @@ void ChartWidget::mouseMoveEvent(QMouseEvent *event)
         QPoint delta = event->pos() - m_panLastPos;
         m_panLastPos = event->pos();
 
+        // Shift tick pixel positions directly for smooth movement
+        // (avoids tick origin alignment causing jumps during pan)
+        if ((m_panAxes & PanX) && m_panAxisRect->xAxis()
+            && m_panAxisRect->xAxis()->isPanEnabled())
+            m_panAxisRect->xAxis()->shiftTickPixelPositions(
+                static_cast<double>(delta.x()));
+
+        if ((m_panAxes & PanY) && m_panAxisRect->yAxis()
+            && m_panAxisRect->yAxis()->isPanEnabled())
+            m_panAxisRect->yAxis()->shiftTickPixelPositions(
+                static_cast<double>(-delta.y()));
+
+        // Then update the actual axis ranges (graphs will be correct)
         QRectF pa = m_panAxisRect->plotArea();
 
         if ((m_panAxes & PanX) && m_panAxisRect->xAxis()
@@ -1095,8 +1467,17 @@ void ChartWidget::mouseReleaseEvent(QMouseEvent *event)
 {
     if (event->button() == Qt::LeftButton && m_panning) {
         m_panning = false;
+        // Unlock tick recalculation
+        if (m_panAxisRect->xAxis()) m_panAxisRect->xAxis()->setSkipTickRecalc(false);
+        if (m_panAxisRect->yAxis()) m_panAxisRect->yAxis()->setSkipTickRecalc(false);
+
+        // Short click (not a drag) → emit click signal
+        if ((event->pos() - m_panLastPos).manhattanLength() < 5)
+            emit chartClicked(event->pos());
+
         m_panAxisRect = nullptr;
         setCursor(Qt::ArrowCursor);
+        invalidateBuffer();
         event->accept();
         return;
     }
