@@ -372,9 +372,6 @@ int  BaseAxis::tickCount() const { return m_ticker ? m_ticker->tickCount() : 5; 
 
 void BaseAxis::calculateTicks()
 {
-    if (m_skipTickRecalc && !m_tickPixelPositions.isEmpty())
-        return;  // keep existing positions, they'll be shifted externally
-
     m_tickValues.clear();
     m_tickValuesDouble.clear();
     m_tickPixelPositions.clear();
@@ -388,7 +385,7 @@ void BaseAxis::calculateTicks()
     double range = max - min;
     double tickStep = m_ticker->getTickStep(range);
     QVector<double> ticks = m_ticker->createTickVector(tickStep, min, max);
-    AxisTicker::trimTicks(min, max, ticks, true);
+    AxisTicker::trimTicks(min, max, ticks, false);
 
     // Determine pixel bounds for clamping
     double pixMin = 0.0, pixMax = 0.0;
@@ -419,13 +416,6 @@ void BaseAxis::calculateTicks()
             }
         }
     }
-}
-
-void BaseAxis::shiftTickPixelPositions(double delta)
-{
-    for (auto &p : m_tickPixelPositions) p += delta;
-    // Sub-ticks during pan: discard. They'll be regenerated on release.
-    m_subTickPixelPositions.clear();
 }
 
 void BaseAxis::drawAxisEnding(QPainter *painter, AxisEnding ending,
@@ -500,13 +490,6 @@ QString NumericAxis::labelFormat() const
     if (auto *nt = dynamic_cast<NumericTicker *>(m_ticker))
         return nt->labelFormat();
     return {};
-}
-
-void NumericAxis::setRange(double min, double max)
-{
-    m_range.set(min, max);
-    if (m_range.isEmpty())
-        m_range.setUpper(m_range.lower() + 1.0);
 }
 
 double NumericAxis::valueToPixel(const QVariant &value) const
@@ -672,7 +655,7 @@ void DateTimeAxis::setRange(const QDateTime &min, const QDateTime &max)
     qint64 lo = qMin(min, max).toSecsSinceEpoch();
     qint64 hi = qMax(min, max).toSecsSinceEpoch();
     if (lo == hi) hi = lo + 60;
-    m_range.set(double(lo), double(hi));
+    BaseAxis::setRange(double(lo), double(hi));
 }
 
 void DateTimeAxis::setDateTimeFormat(DateTimeFormat f)
@@ -856,7 +839,7 @@ void DateAxis::setRange(const QDate &min, const QDate &max)
     qint64 lo = qMin(min, max).toJulianDay();
     qint64 hi = qMax(min, max).toJulianDay();
     if (lo == hi) hi = lo + 1;
-    m_range.set(double(lo), double(hi));
+    BaseAxis::setRange(double(lo), double(hi));
 }
 
 void DateAxis::setDateTimeFormat(DateTimeFormat f)
@@ -1114,12 +1097,14 @@ void AxisRect::drawGridLines(QPainter *painter)
 {
     QRectF pa = plotArea();
     painter->save();
+    painter->setClipRect(pa);  // prevent grid lines from leaking outside plot area
     QPen gridPen(m_gridLineColor, 1.0, Qt::DotLine);
     painter->setPen(gridPen);
 
     if (m_showGridY && m_yAxis) {
         const auto &positions = m_yAxis->tickPixelPositions();
         for (double pos : positions) {
+            if (pos < pa.top() || pos > pa.bottom()) continue;
             painter->drawLine(QPointF(pa.left(), pos),
                               QPointF(pa.right(), pos));
         }
@@ -1128,6 +1113,7 @@ void AxisRect::drawGridLines(QPainter *painter)
     if (m_showGridX && m_xAxis) {
         const auto &positions = m_xAxis->tickPixelPositions();
         for (double pos : positions) {
+            if (pos < pa.left() || pos > pa.right()) continue;
             painter->drawLine(QPointF(pos, pa.top()),
                               QPointF(pos, pa.bottom()));
         }
@@ -1372,10 +1358,6 @@ void ChartWidget::mousePressEvent(QMouseEvent *event)
             m_panLastPos = event->pos();
             m_panAxisRect = ar;
 
-            // Lock tick positions during pan to avoid jumpy origin alignment
-            if (ar->xAxis()) ar->xAxis()->setSkipTickRecalc(true);
-            if (ar->yAxis()) ar->yAxis()->setSkipTickRecalc(true);
-
             if (auto *dta = dynamic_cast<DateTimeAxis *>(ar->xAxis()))
                 dta->resetPanRemainder();
             if (auto *da = dynamic_cast<DateAxis *>(ar->xAxis()))
@@ -1399,19 +1381,6 @@ void ChartWidget::mouseMoveEvent(QMouseEvent *event)
         QPoint delta = event->pos() - m_panLastPos;
         m_panLastPos = event->pos();
 
-        // Shift tick pixel positions directly for smooth movement
-        // (avoids tick origin alignment causing jumps during pan)
-        if ((m_panAxes & PanX) && m_panAxisRect->xAxis()
-            && m_panAxisRect->xAxis()->isPanEnabled())
-            m_panAxisRect->xAxis()->shiftTickPixelPositions(
-                static_cast<double>(delta.x()));
-
-        if ((m_panAxes & PanY) && m_panAxisRect->yAxis()
-            && m_panAxisRect->yAxis()->isPanEnabled())
-            m_panAxisRect->yAxis()->shiftTickPixelPositions(
-                static_cast<double>(-delta.y()));
-
-        // Then update the actual axis ranges (graphs will be correct)
         QRectF pa = m_panAxisRect->plotArea();
 
         if ((m_panAxes & PanX) && m_panAxisRect->xAxis()
@@ -1467,9 +1436,6 @@ void ChartWidget::mouseReleaseEvent(QMouseEvent *event)
 {
     if (event->button() == Qt::LeftButton && m_panning) {
         m_panning = false;
-        // Unlock tick recalculation
-        if (m_panAxisRect->xAxis()) m_panAxisRect->xAxis()->setSkipTickRecalc(false);
-        if (m_panAxisRect->yAxis()) m_panAxisRect->yAxis()->setSkipTickRecalc(false);
 
         // Short click (not a drag) → emit click signal
         if ((event->pos() - m_panLastPos).manhattanLength() < 5)

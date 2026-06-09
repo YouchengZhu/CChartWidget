@@ -233,9 +233,9 @@ static AxisRect *createComboDemo()
     xAxis->setDateTimeFormat(DateTimeFormat::MMdd);
 
     auto *yAxis = new NumericAxis(BaseAxis::Vertical);
-    yAxis->setRange(5.0, 55.0);
+    yAxis->setRange(0.0, 1.0);
     yAxis->setTickCount(5);
-    yAxis->setDecimalPlaces(1);
+    yAxis->setDecimalPlaces(2);
 
     ar->setXAxis(xAxis);
     ar->setYAxis(yAxis);
@@ -252,11 +252,11 @@ static AxisRect *createComboDemo()
     struct DayData { QDate d; double lo; double hi; };
     QVector<QVector<DayData>> allDays(6);
     for (int ci = 0; ci < 6; ++ci) {
-        double base = 10.0 + ci * 5.0;  // each combo in its own Y band
+        double base = 15.0 + ci * 12.0;  // raw range: different base per combo
         for (int i = 0; i < 7; ++i) {
             QDate d = today.addDays(i - 6);
-            double lo = base + (qrand() % 30) / 10.0;
-            double hi = lo + 4.0 + (qrand() % 80) / 10.0;
+            double lo = base + (qrand() % 50) / 10.0;
+            double hi = lo + 6.0 + (qrand() % 60) / 10.0;
             allDays[ci].append({d, lo, hi});
         }
     }
@@ -268,6 +268,7 @@ static AxisRect *createComboDemo()
         combo->setColor(colors[ci]);
         combo->setLayer(ci);
         combo->rangeBar()->setBarWidthFactor(0.15);
+        combo->setNormalized(true);   // normalize to [0, 1.0]
 
         for (const auto &dd : allDays[ci])
             combo->addPoint(dd.d, dd.lo, dd.hi);
@@ -299,7 +300,7 @@ int main(int argc, char *argv[])
         "StackedBarGraph\ndate X · 3-series stacked",
         "RangeBarGraph\ncustom min–max range",
         "Large Data (10k pts)\nadaptive sampling ON",
-        "Combo: Range+Line\nshared color · mid aligned"
+        "Combo: 6-series normalized\nto [0.00 ~ 1.00]"
     };
     for (const auto &t : titles) {
         auto *lbl = new QLabel(t);
@@ -329,18 +330,23 @@ int main(int argc, char *argv[])
         if (!ar || g_combos.isEmpty()) return;
 
         QRectF pa = ar->plotArea();
-        double best = std::numeric_limits<double>::max();
-        ComboGraph<QDate, double> *bestCombo = nullptr;
+        ComboGraph<QDate, double> *hitCombo = nullptr;
+        QVariant k, v; double bestD = std::numeric_limits<double>::max();
+        // Hit test: prefer bar span match over pixel distance
         for (auto *c : g_combos) {
-            QVariant k, v; double d;
-            if (c->nearestPoint(ar->xAxis(), ar->yAxis(), pa,
-                                QPointF(pos), k, v, d)) {
-                if (d < best && d < 30) { best = d; bestCombo = c; }
+            QVariant ck, cv;
+            if (c->hitTest(ar->xAxis(), ar->yAxis(), pa, QPointF(pos), ck, cv)) {
+                hitCombo = c;  // exact bar match wins immediately
+                break;
+            }
+            double d;
+            if (c->nearestPoint(ar->xAxis(), ar->yAxis(), pa, QPointF(pos), ck, cv, d)) {
+                if (d < bestD && d < 25) { bestD = d; hitCombo = c; k = ck; v = cv; }
             }
         }
-        if (bestCombo) {
+        if (hitCombo) {
             for (auto *c : g_combos)
-                c->setSelected(c == bestCombo);
+                c->setSelected(c == hitCombo);
             chartWidget->invalidateBuffer();
         }
     });

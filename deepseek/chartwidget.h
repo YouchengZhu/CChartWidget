@@ -188,6 +188,11 @@ public:
                               QVariant &key, QVariant &value,
                               double &distance) const = 0;
 
+    virtual bool hitTest(BaseAxis *xAxis, BaseAxis *yAxis,
+                         const QRectF &plotArea, const QPointF &pixel,
+                         QVariant &key, QVariant &value) const
+    { double d; return nearestPoint(xAxis, yAxis, plotArea, pixel, key, value, d); }
+
     virtual void setLayer(int layer) { m_layer = layer; }
     int layer() const { return m_layer; }
 
@@ -475,10 +480,6 @@ public:
     QVector<QVariant> tickValues() const { return m_tickValues; }
     QVector<double> tickPixelPositions() const { return m_tickPixelPositions; }
 
-    void shiftTickPixelPositions(double delta);
-    void setSkipTickRecalc(bool skip) { m_skipTickRecalc = skip; }
-    bool skipTickRecalc() const { return m_skipTickRecalc; }
-
     // Tick label rotation (degrees, 0 = horizontal)
     void setTickLabelRotation(double degrees) { m_tickLabelRotation = degrees; }
     double tickLabelRotation() const { return m_tickLabelRotation; }
@@ -488,7 +489,10 @@ public:
     void setLowerEnding(AxisEnding e) { m_lowerEnding = e; }
     AxisEnding lowerEnding() const { return m_lowerEnding; }
     void setUpperEnding(AxisEnding e) { m_upperEnding = e; }
-    AxisEnding upperEnding() const { return m_upperEnding; }
+    // Unified range (raw double storage, all axis types)
+    const AxisRange &range() const { return m_range; }
+    AxisRange &range() { return m_range; }
+    void setRange(double lo, double hi) { m_range.set(lo, hi); if (m_range.isEmpty()) m_range.setUpper(m_range.lower() + 1e-10); }
 
 protected:
     void calculateTicks();
@@ -522,11 +526,11 @@ protected:
 
     QRectF m_cachePlotArea;
 
+    AxisRange m_range;
+
     AxisTicker *m_ticker = nullptr;
     bool m_ownsTicker = false;
     int m_subTickCount = 4;
-    bool m_skipTickRecalc = false;
-
     double niceNumber(double x, bool roundUp) const;
     void drawAxisEnding(QPainter *painter, AxisEnding ending,
                         const QPointF &pos, double directionAngle) const;
@@ -543,11 +547,9 @@ class NumericAxis : public BaseAxis
 public:
     explicit NumericAxis(AxisOrientation orientation = Horizontal, QObject *parent = nullptr);
 
-    void setRange(double min, double max);
+    using BaseAxis::setRange;  // exposes setRange(double, double)
     double rangeMin() const { return m_range.lower(); }
     double rangeMax() const { return m_range.upper(); }
-    AxisRange &range() { return m_range; }
-    const AxisRange &range() const { return m_range; }
 
     void setDecimalPlaces(int places);
     int decimalPlaces() const;
@@ -566,9 +568,6 @@ protected:
     double tickRangeMin() const override { return m_range.lower(); }
     double tickRangeMax() const override { return m_range.upper(); }
     QVariant tickValueToVariant(double v) const override { return QVariant(v); }
-
-private:
-    AxisRange m_range{0.0, 100.0};
 };
 
 // ============================================================================
@@ -583,11 +582,10 @@ public:
     explicit DateTimeAxis(AxisOrientation orientation = Horizontal,
                           QObject *parent = nullptr);
 
+    using BaseAxis::setRange;  // exposes setRange(double, double)
     void setRange(const QDateTime &min, const QDateTime &max);
     QDateTime rangeMin() const;
     QDateTime rangeMax() const;
-    AxisRange &range() { return m_range; }
-    const AxisRange &range() const { return m_range; }
 
     void setDateTimeFormat(DateTimeFormat f);
     DateTimeFormat dateTimeFormat() const;
@@ -606,7 +604,6 @@ protected:
     QVariant tickValueToVariant(double v) const override;
 
 private:
-    AxisRange m_range;
     double m_panRemainder = 0.0;
 };
 
@@ -622,11 +619,10 @@ public:
     explicit DateAxis(AxisOrientation orientation = Horizontal,
                       QObject *parent = nullptr);
 
+    using BaseAxis::setRange;  // exposes setRange(double, double)
     void setRange(const QDate &min, const QDate &max);
     QDate rangeMin() const;
     QDate rangeMax() const;
-    AxisRange &range() { return m_range; }
-    const AxisRange &range() const { return m_range; }
 
     void setDateTimeFormat(DateTimeFormat f);
     DateTimeFormat dateTimeFormat() const;
@@ -645,7 +641,6 @@ protected:
     QVariant tickValueToVariant(double v) const override;
 
 private:
-    AxisRange m_range;
     double m_panRemainder = 0.0;
 };
 
@@ -1812,6 +1807,15 @@ public:
     void setColor(const QColor &c);
     QColor color() const { return m_color; }
 
+    void setFillEnabled(bool on) { m_fillEnabled = on; }
+    bool isFillEnabled() const { return m_fillEnabled; }
+
+    void setFillColor(const QColor &c) { m_fillColor = c; }
+    QColor fillColor() const { return m_fillColor.isValid() ? m_fillColor : m_color; }
+
+    void setNormalized(bool on) { m_normalized = on; rebuildInternal(); }
+    bool isNormalized() const { return m_normalized; }
+
     void setSelected(bool sel);
     bool isSelected() const { return m_selected; }
 
@@ -1826,6 +1830,9 @@ public:
     bool nearestPoint(BaseAxis *xAxis, BaseAxis *yAxis,
                       const QRectF &plotArea, const QPointF &pixel,
                       QVariant &key, QVariant &value, double &distance) const override;
+    bool hitTest(BaseAxis *xAxis, BaseAxis *yAxis,
+                 const QRectF &plotArea, const QPointF &pixel,
+                 QVariant &key, QVariant &value) const override;
 
 private:
     RangeBarGraph<TKey, TValue> *m_rangeBar = nullptr;
@@ -1835,6 +1842,15 @@ private:
     int m_baseAlpha = 40;
     int m_savedLayer = 0;
 
+    bool m_fillEnabled = true;
+    QColor m_fillColor;
+
+    bool m_normalized = false;
+
+    struct RawPoint { TKey key; TValue lo; TValue hi; };
+    QVector<RawPoint> m_rawData;
+
+    void rebuildInternal();
     void applyOpacityToGraph(GraphBase *g, const QColor &baseColor, int alpha);
 };
 
@@ -1859,16 +1875,50 @@ ComboGraph<TKey, TValue>::~ComboGraph()
 }
 
 template<typename TKey, typename TValue>
+void ComboGraph<TKey, TValue>::rebuildInternal()
+{
+    m_rangeBar->clearData();
+    m_line->clearData();
+    if (m_rawData.isEmpty()) return;
+
+    if (m_normalized) {
+        // Min-max normalize: (val - min) / (max - min) * yMax → range [0, yMax]
+        TValue rawMin = m_rawData.first().lo, rawMax = m_rawData.first().hi;
+        for (const auto &rp : m_rawData) {
+            if (rp.lo < rawMin) rawMin = rp.lo;
+            if (rp.hi > rawMax) rawMax = rp.hi;
+        }
+        TValue span = rawMax - rawMin;
+        if (span <= TValue()) span = TValue(1);
+            double scale = 1.0 / double(span);
+
+        for (const auto &rp : m_rawData) {
+            double nLo = (double(rp.lo) - double(rawMin)) * scale;
+            double nHi = (double(rp.hi) - double(rawMin)) * scale;
+            double nMid = (nLo + nHi) / 2.0;
+            m_rangeBar->addPoint(rp.key, TValue(nLo), TValue(nHi));
+            m_line->addPoint(rp.key, TValue(nMid));
+        }
+    } else {
+        for (const auto &rp : m_rawData) {
+            m_rangeBar->addPoint(rp.key, rp.lo, rp.hi);
+            m_line->addPoint(rp.key, (rp.lo + rp.hi) / TValue(2));
+        }
+    }
+}
+
+template<typename TKey, typename TValue>
 void ComboGraph<TKey, TValue>::addPoint(const TKey &key,
                                          const TValue &lo, const TValue &hi)
 {
-    m_rangeBar->addPoint(key, lo, hi);
-    m_line->addPoint(key, (lo + hi) / TValue(2));
+    m_rawData.append({key, lo, hi});
+    rebuildInternal();
 }
 
 template<typename TKey, typename TValue>
 void ComboGraph<TKey, TValue>::clearData()
 {
+    m_rawData.clear();
     m_rangeBar->clearData();
     m_line->clearData();
 }
@@ -1947,6 +1997,36 @@ void ComboGraph<TKey, TValue>::draw(QPainter *painter, BaseAxis *xAxis,
                                      BaseAxis *yAxis, const QRectF &plotArea)
 {
     if (!isVisible()) return;
+
+    // Fill area between line and x-axis baseline with translucent color
+    if (m_fillEnabled && !m_line->data().isEmpty()) {
+        QColor fillC = fillColor();
+        int alpha = m_selected ? 255 : m_baseAlpha;
+        fillC.setAlpha(qBound(0, alpha / 2, 255));  // fill is more transparent than graph
+
+        QVector<QPointF> pts;
+        pts.reserve(m_line->dataCount() + 2);
+        for (const auto &dp : m_line->data()) {
+            pts.append(QPointF(
+                xAxis->valueToPixel(QVariant::fromValue(dp.key)),
+                yAxis->valueToPixel(QVariant::fromValue(dp.value))));
+        }
+        if (pts.size() >= 2) {
+            QPainterPath fillPath;
+            fillPath.moveTo(pts.first());
+            for (int i = 1; i < pts.size(); ++i)
+                fillPath.lineTo(pts[i]);
+            double baseY = yAxis->valueToPixel(QVariant::fromValue(TValue()));
+            fillPath.lineTo(QPointF(pts.last().x(), baseY));
+            fillPath.lineTo(QPointF(pts.first().x(), baseY));
+            fillPath.closeSubpath();
+            painter->save();
+            painter->setClipRect(plotArea);
+            painter->fillPath(fillPath, QBrush(fillC));
+            painter->restore();
+        }
+    }
+
     m_rangeBar->draw(painter, xAxis, yAxis, plotArea);
     m_line->draw(painter, xAxis, yAxis, plotArea);
 }
@@ -1961,13 +2041,68 @@ bool ComboGraph<TKey, TValue>::nearestPoint(BaseAxis *xAxis, BaseAxis *yAxis,
     bool okR = m_rangeBar->nearestPoint(xAxis, yAxis, plotArea, pixel, kR, vR, distR);
     bool okL = m_line->nearestPoint(xAxis, yAxis, plotArea, pixel, kL, vL, distL);
 
+    // Map normalized [0,1] back to raw
+    auto rawValue = [this](const QVariant &k, const QVariant &v) -> QVariant {
+        Q_UNUSED(k)
+        if (!m_normalized) return v;
+        if (m_rawData.isEmpty()) return v;
+        bool ok; double val = v.toDouble(&ok);
+        if (!ok) return v;
+
+        TValue rawMin = m_rawData.first().lo, rawMax = m_rawData.first().hi;
+        for (const auto &rp : m_rawData) {
+            if (rp.lo < rawMin) rawMin = rp.lo;
+            if (rp.hi > rawMax) rawMax = rp.hi;
+        }
+        double span = double(rawMax - rawMin);
+        if (span <= 0.0) span = 1.0;
+        return QVariant(val * span + double(rawMin));
+    };
+
     if (okR && okL) {
-        if (distR <= distL) { key = kR; value = vR; distance = distR; }
-        else                { key = kL; value = vL; distance = distL; }
+        if (distR <= distL) { key = kR; value = rawValue(kR, vR); distance = distR; }
+        else                { key = kL; value = rawValue(kL, vL); distance = distL; }
         return true;
     }
-    if (okR) { key = kR; value = vR; distance = distR; return true; }
-    if (okL) { key = kL; value = vL; distance = distL; return true; }
+    if (okR) { key = kR; value = rawValue(kR, vR); distance = distR; return true; }
+    if (okL) { key = kL; value = rawValue(kL, vL); distance = distL; return true; }
+    return false;
+}
+
+// Hit test: check if click falls within a bar's min-max range (vertical span)
+// This works better than nearestPoint when multiple combos are normalized
+template<typename TKey, typename TValue>
+bool ComboGraph<TKey, TValue>::hitTest(BaseAxis *xAxis, BaseAxis *yAxis,
+    const QRectF &plotArea, const QPointF &pixel,
+    QVariant &key, QVariant &value) const
+{
+    if (!isVisible() || m_rawData.isEmpty())
+        return false;
+
+    // Use range bar data for hit detection (bar span covers the full clickable area)
+    for (int i = 0; i < m_rangeBar->dataCount(); ++i) {
+        const auto &dp = m_rangeBar->data().at(i);
+        double px = xAxis->valueToPixel(QVariant::fromValue(dp.key));
+        double pyLo = yAxis->valueToPixel(QVariant::fromValue(dp.min));
+        double pyHi = yAxis->valueToPixel(QVariant::fromValue(dp.max));
+
+        // Bar horizontal tolerance: ±bar width, vertical: within min..max
+        double barW = plotArea.width() / qMax(1, m_rangeBar->dataCount())
+                      * m_rangeBar->barWidthFactor();
+        if (qAbs(pixel.x() - px) <= barW / 2.0
+            && pixel.y() >= fmin(pyLo, pyHi)
+            && pixel.y() <= fmax(pyLo, pyHi)) {
+            key = QVariant::fromValue(dp.key);
+            // Report raw value
+            if (m_normalized && i < m_rawData.size()) {
+                double rawMid = (double(m_rawData[i].lo) + double(m_rawData[i].hi)) / 2.0;
+                value = QVariant(rawMid);
+            } else {
+                value = QVariant((dp.min + dp.max) / TValue(2));
+            }
+            return true;
+        }
+    }
     return false;
 }
 
