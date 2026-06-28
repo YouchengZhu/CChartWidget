@@ -43,6 +43,124 @@ AxisRange AxisRange::bounded(double lo, double hi) const
 }
 
 // ============================================================================
+// ChartLegend
+// ============================================================================
+
+void ChartLegend::draw(QPainter *painter, const QRectF &plotArea,
+                        const QVector<GraphBase *> &graphs)
+{
+    // Filter visible graphs with names
+    QVector<GraphBase *> items;
+    for (auto *g : graphs) {
+        if (g && g->showInLegend() && !g->name().isEmpty())
+            items.append(g);
+    }
+    if (items.isEmpty()) return;
+
+    // Measure
+    int textW = 0, textH = 0;
+    for (auto *g : items) {
+        QRectF br = painter->fontMetrics().boundingRect(g->name());
+        textW = qMax(textW, static_cast<int>(br.width()));
+        textH = qMax(textH, static_cast<int>(br.height()));
+    }
+    int gap = m_spacing;
+    int itemW = m_iconSize.width() + gap + textW;
+    int itemH = qMax(m_iconSize.height(), textH);
+    int totalItems = items.size();
+
+    int legendW, legendH;
+    if (m_orientation == Vertical) {
+        legendW = itemW + gap * 2;
+        legendH = itemH * totalItems + gap * (totalItems + 1);
+    } else {
+        legendW = (itemW + gap) * totalItems + gap;
+        legendH = itemH + gap * 2;
+    }
+
+    QRectF legendRect;
+    switch (m_position) {
+    case InsideTopRight:
+        legendRect = QRectF(plotArea.right() - legendW - gap, plotArea.top() + gap,
+                            legendW, legendH);
+        break;
+    case InsideTopCenter:
+        legendRect = QRectF(plotArea.center().x() - legendW / 2.0,
+                            plotArea.top() + gap, legendW, legendH);
+        break;
+    case AbovePlot:
+        legendRect = QRectF(plotArea.center().x() - legendW / 2.0,
+                            plotArea.top() - legendH - gap,
+                            legendW, legendH);
+        break;
+    }
+
+    painter->save();
+    painter->setPen(QPen(m_borderColor, 1));
+    painter->setBrush(m_bgColor);
+    painter->drawRoundedRect(legendRect, 4, 4);
+
+    m_itemRects.clear();
+    m_itemRects.reserve(totalItems);
+
+    double startX = (m_orientation == Vertical)
+        ? legendRect.left() + gap
+        : legendRect.left() + (legendW - (itemW * totalItems + gap * (totalItems - 1))) / 2.0;
+    double startY = (m_orientation == Vertical)
+        ? legendRect.top() + (legendH - (itemH * totalItems + gap * (totalItems - 1))) / 2.0
+        : legendRect.top() + gap;
+
+    for (int idx = 0; idx < items.size(); ++idx) {
+        auto *g = items[idx];
+        double x = (m_orientation == Vertical)
+            ? startX
+            : startX + idx * (itemW + gap);
+        double y = (m_orientation == Vertical)
+            ? startY + idx * (itemH + gap)
+            : startY;
+
+        double yMid = y + (itemH - m_iconSize.height()) / 2.0;
+        QRectF iconR(x, yMid, m_iconSize.width(), m_iconSize.height());
+        g->drawLegendIcon(painter, iconR);
+
+        painter->setPen(m_textColor);
+        painter->setFont(m_font);
+        QRectF textR(x + m_iconSize.width() + gap, y, textW, itemH);
+        painter->drawText(textR, Qt::AlignVCenter | Qt::AlignLeft, g->name());
+
+        QRectF itemRect(x - 2, y, itemW + 4, itemH);
+        m_itemRects.append(itemRect);
+    }
+
+    painter->restore();
+}
+
+int ChartLegend::itemAt(const QPointF &pos) const
+{
+    for (int i = 0; i < m_itemRects.size(); ++i) {
+        if (m_itemRects[i].contains(pos))
+            return i;
+    }
+    return -1;
+}
+
+QRectF ChartLegend::itemRect(int index) const
+{
+    if (index >= 0 && index < m_itemRects.size())
+        return m_itemRects[index];
+    return {};
+}
+
+// ============================================================================
+// GraphBase
+// ============================================================================
+
+void GraphBase::drawLegendIcon(QPainter *painter, const QRectF &rect) const
+{
+    painter->fillRect(rect, m_color);
+}
+
+// ============================================================================
 // GridLayoutItem
 // ============================================================================
 
@@ -1082,6 +1200,9 @@ void AxisRect::render(QPainter *painter)
         if (graph->isVisible())
             graph->draw(painter, m_xAxis, m_yAxis, pa);
     }
+
+    if (m_legend)
+        m_legend->draw(painter, pa, m_graphs);
 }
 
 void AxisRect::drawBackground(QPainter *painter)
@@ -1437,9 +1558,51 @@ void ChartWidget::mouseReleaseEvent(QMouseEvent *event)
     if (event->button() == Qt::LeftButton && m_panning) {
         m_panning = false;
 
-        // Short click (not a drag) → emit click signal
-        if ((event->pos() - m_panLastPos).manhattanLength() < 5)
+        // Short click (not a drag)
+        if ((event->pos() - m_panLastPos).manhattanLength() < 5) {
+            // Check legend hit first
+            bool handled = false;
+            if (m_panAxisRect->legend()) {
+                int idx = m_panAxisRect->legend()->itemAt(QPointF(event->pos()));
+                if (idx >= 0) {
+                    QVector<GraphBase *> graphs = m_panAxisRect->graphs();
+                    int legendIdx = 0;
+                    for (auto *g : graphs) {
+                        if (g && g->showInLegend() && !g->name().isEmpty()) {
+                            if (legendIdx == idx) {
+                                g->setVisible(!g->isVisible()); handled = true; break;
+                            }
+                            ++legendIdx;
+                        }
+                    }
+                }
+            }
+            // If not legend, try graph hit-test to toggle highlight
+            if (!handled) {
+                QRectF pa = m_panAxisRect->plotArea();
+                QPointF posF = QPointF(event->pos());
+                GraphBase *hit = nullptr;
+                QVariant k, v; double bestD = std::numeric_limits<double>::max();
+                for (auto *g : m_panAxisRect->graphs()) {
+                    if (!g->isVisible()) continue;
+                    QVariant ck, cv;
+                    // hitTest first, then nearestPoint
+                    if (g->hitTest(m_panAxisRect->xAxis(), m_panAxisRect->yAxis(), pa, posF, ck, cv)) {
+                        hit = g; break;
+                    }
+                    double d;
+                    if (g->nearestPoint(m_panAxisRect->xAxis(), m_panAxisRect->yAxis(), pa, posF, ck, cv, d)) {
+                        if (d < bestD && d < 25) { bestD = d; hit = g; k = ck; v = cv; }
+                    }
+                }
+                if (hit) {
+                    for (auto *g : m_panAxisRect->graphs())
+                        g->setHighlighted(g == hit);
+                    handled = true;
+                }
+            }
             emit chartClicked(event->pos());
+        }
 
         m_panAxisRect = nullptr;
         setCursor(Qt::ArrowCursor);

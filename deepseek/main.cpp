@@ -219,8 +219,6 @@ static AxisRect *createLargeDataDemo()
 // 6. 6条 ComboGraph — 范围柱 + 折线，点击互选
 // ============================================================================
 
-static QVector<ComboGraph<QDate, double> *> g_combos;
-
 static AxisRect *createComboDemo()
 {
     auto *ar = new AxisRect;
@@ -239,6 +237,10 @@ static AxisRect *createComboDemo()
 
     ar->setXAxis(xAxis);
     ar->setYAxis(yAxis);
+
+    ar->legend()->setPosition(ChartLegend::AbovePlot);
+    ar->legend()->setOrientation(ChartLegend::Horizontal);
+    ar->legend()->setIconSize(QSize(12, 8));
 
     QVector<QColor> colors = {
         QColor(70,  130, 180),
@@ -261,7 +263,6 @@ static AxisRect *createComboDemo()
         }
     }
 
-    g_combos.clear();
     for (int ci = 0; ci < 6; ++ci) {
         auto *combo = new ComboGraph<QDate, double>;
         combo->setName(QString(char('A' + ci)));
@@ -274,7 +275,6 @@ static AxisRect *createComboDemo()
             combo->addPoint(dd.d, dd.lo, dd.hi);
 
         ar->addGraph(combo);
-        g_combos.append(combo);
     }
     return ar;
 }
@@ -300,7 +300,7 @@ int main(int argc, char *argv[])
         "StackedBarGraph\ndate X · 3-series stacked",
         "RangeBarGraph\ncustom min–max range",
         "Large Data (10k pts)\nadaptive sampling ON",
-        "Combo: 6-series normalized\nto [0.00 ~ 1.00]"
+        "Combo: 6-series + Legend\nclick legend to toggle"
     };
     for (const auto &t : titles) {
         auto *lbl = new QLabel(t);
@@ -321,35 +321,6 @@ int main(int argc, char *argv[])
 
     chartWidget->setChartTable(table);
     chartWidget->invalidateBuffer();
-
-    // Click-to-select: short click on combo chart area selects nearest combo
-    QObject::connect(chartWidget, &ChartWidget::chartClicked,
-                     &window, [chartWidget](QPoint pos) {
-        GridLayoutItem *item = chartWidget->chartTable()->itemAtPos(pos);
-        auto *ar = dynamic_cast<AxisRect *>(item);
-        if (!ar || g_combos.isEmpty()) return;
-
-        QRectF pa = ar->plotArea();
-        ComboGraph<QDate, double> *hitCombo = nullptr;
-        QVariant k, v; double bestD = std::numeric_limits<double>::max();
-        // Hit test: prefer bar span match over pixel distance
-        for (auto *c : g_combos) {
-            QVariant ck, cv;
-            if (c->hitTest(ar->xAxis(), ar->yAxis(), pa, QPointF(pos), ck, cv)) {
-                hitCombo = c;  // exact bar match wins immediately
-                break;
-            }
-            double d;
-            if (c->nearestPoint(ar->xAxis(), ar->yAxis(), pa, QPointF(pos), ck, cv, d)) {
-                if (d < bestD && d < 25) { bestD = d; hitCombo = c; k = ck; v = cv; }
-            }
-        }
-        if (hitCombo) {
-            for (auto *c : g_combos)
-                c->setSelected(c == hitCombo);
-            chartWidget->invalidateBuffer();
-        }
-    });
 
     mainLayout->addLayout(labelRow);
     mainLayout->addWidget(chartWidget, 1);

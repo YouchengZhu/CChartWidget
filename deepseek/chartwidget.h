@@ -171,6 +171,50 @@ private:
 };
 
 // ============================================================================
+// ChartLegend
+// ============================================================================
+
+class ChartLegend
+{
+public:
+    enum Position { InsideTopRight, InsideTopCenter, AbovePlot };
+    enum Orientation { Vertical, Horizontal };
+
+    void setPosition(Position p) { m_position = p; }
+    Position position() const { return m_position; }
+
+    void setOrientation(Orientation o) { m_orientation = o; }
+    Orientation orientation() const { return m_orientation; }
+
+    void setIconSize(const QSize &s) { m_iconSize = s; }
+    QSize iconSize() const { return m_iconSize; }
+
+    void setFont(const QFont &f) { m_font = f; }
+    QFont font() const { return m_font; }
+
+    void setTextColor(const QColor &c) { m_textColor = c; }
+    void setBackgroundColor(const QColor &c) { m_bgColor = c; }
+    void setBorderColor(const QColor &c) { m_borderColor = c; }
+    void setItemSpacing(int s) { m_spacing = s; }
+
+    void draw(QPainter *painter, const QRectF &plotArea,
+              const QVector<GraphBase *> &graphs);
+    int itemAt(const QPointF &pos) const;
+    QRectF itemRect(int index) const;
+
+private:
+    Position m_position = InsideTopRight;
+    Orientation m_orientation = Vertical;
+    QSize m_iconSize{14, 10};
+    QFont m_font;
+    QColor m_textColor = Qt::black;
+    QColor m_bgColor{255, 255, 255, 200};
+    QColor m_borderColor{180, 180, 180};
+    int m_spacing = 4;
+    QVector<QRectF> m_itemRects;
+};
+
+// ============================================================================
 // GraphBase — non-template base for all graph types
 // ============================================================================
 
@@ -199,16 +243,26 @@ public:
     virtual void setName(const QString &name) { m_name = name; }
     QString name() const { return m_name; }
 
+    virtual void drawLegendIcon(QPainter *painter, const QRectF &iconRect) const;
+
+    void setShowInLegend(bool show) { m_showInLegend = show; }
+    bool showInLegend() const { return m_showInLegend; }
+
     void setVisible(bool visible) { m_visible = visible; }
     bool isVisible() const { return m_visible; }
 
     virtual void setColor(const QColor &c) { m_color = c; }
     QColor color() const { return m_color; }
 
+    virtual void setHighlighted(bool hl) { m_highlighted = hl; }
+    bool isHighlighted() const { return m_highlighted; }
+
 private:
     int m_layer = 0;
     QString m_name;
     bool m_visible = true;
+    bool m_showInLegend = true;
+    bool m_highlighted = false;
     QColor m_color;
 };
 
@@ -818,6 +872,7 @@ public:
 
     void draw(QPainter *painter, BaseAxis *xAxis, BaseAxis *yAxis,
               const QRectF &plotArea) override;
+    void drawLegendIcon(QPainter *painter, const QRectF &iconRect) const override;
 
 private:
     void drawScatter(QPainter *painter, const QPointF &center);
@@ -860,6 +915,7 @@ public:
 
     void draw(QPainter *painter, BaseAxis *xAxis, BaseAxis *yAxis,
               const QRectF &plotArea) override;
+    void drawLegendIcon(QPainter *painter, const QRectF &iconRect) const override;
 
 private:
     QColor m_barColor = QColor(65, 105, 225);
@@ -904,6 +960,7 @@ public:
 
     void draw(QPainter *painter, BaseAxis *xAxis, BaseAxis *yAxis,
               const QRectF &plotArea) override;
+    void drawLegendIcon(QPainter *painter, const QRectF &iconRect) const override;
 
 private:
     QVector<DataVector> m_seriesData;
@@ -939,6 +996,9 @@ public:
     QVector<GraphBase *> graphs() const { return m_graphs; }
     void clearGraphs();
 
+    void setLegend(ChartLegend *legend) { m_legend = legend; }
+    ChartLegend *legend() const { return m_legend; }
+
     void setBackgroundColor(const QColor &color) { m_backgroundColor = color; }
     QColor backgroundColor() const { return m_backgroundColor; }
 
@@ -971,6 +1031,7 @@ private:
     BaseAxis *m_xAxis = nullptr;
     BaseAxis *m_yAxis = nullptr;
     QVector<GraphBase *> m_graphs;
+    ChartLegend *m_legend = new ChartLegend;
 
     QRect m_geometry;
     QMarginsF m_margins{60.0, 20.0, 20.0, 40.0};
@@ -1142,6 +1203,25 @@ AbstractGraph<TKey, TValue>::computeVisibleRange(BaseAxis *xAxis,
 }
 
 // ---- LineGraph ----
+
+template<typename TKey, typename TValue>
+void LineGraph<TKey, TValue>::drawLegendIcon(QPainter *painter,
+                                              const QRectF &rect) const
+{
+    painter->fillRect(rect.adjusted(0, rect.height()/2 - 1, 0, -rect.height()/2 + 1),
+                      m_lineColor);
+    ScatterFormat sf = m_scatterFormat;  // copy, we draw one circle
+    if (sf.shape != ScatterShape::None && sf.shape != ScatterShape::Circle)
+        sf.shape = ScatterShape::Circle;
+    if (sf.isVisible()) {
+        QPointF c = rect.center();
+        sf.size = qMin(6, static_cast<int>(rect.height()));
+        QPen pen(sf.color, sf.borderWidth);
+        painter->setPen(pen);
+        painter->setBrush(sf.fillColor);
+        painter->drawEllipse(c, sf.size/2.0, sf.size/2.0);
+    }
+}
 
 template<typename TKey, typename TValue>
 LineGraph<TKey, TValue>::LineGraph()
@@ -1346,6 +1426,15 @@ QPolygonF LineGraph<TKey, TValue>::buildTriangle(const QPointF &center, int half
 // ---- BarGraph ----
 
 template<typename TKey, typename TValue>
+void BarGraph<TKey, TValue>::drawLegendIcon(QPainter *painter,
+                                             const QRectF &rect) const
+{
+    painter->fillRect(rect, m_barColor);
+    painter->setPen(QPen(m_borderColor, m_borderWidth));
+    painter->drawRect(rect);
+}
+
+template<typename TKey, typename TValue>
 BarGraph<TKey, TValue>::BarGraph()
 {
     this->m_color = m_barColor;
@@ -1407,6 +1496,23 @@ void BarGraph<TKey, TValue>::draw(QPainter *painter, BaseAxis *xAxis,
 }
 
 // ---- StackedBarGraph ----
+
+template<typename TKey, typename TValue>
+void StackedBarGraph<TKey, TValue>::drawLegendIcon(QPainter *painter,
+                                                    const QRectF &rect) const
+{
+    int n = qMin(m_seriesData.size(), 3);
+    double segH = rect.height() / n;
+    for (int i = 0; i < n; ++i) {
+        QRectF seg(rect.left(), rect.top() + segH * i,
+                   rect.width(), segH);
+        painter->fillRect(seg, m_seriesColors[i]);
+    }
+    if (m_borderWidth > 0) {
+        painter->setPen(QPen(m_borderColor, m_borderWidth));
+        painter->drawRect(rect);
+    }
+}
 
 template<typename TKey, typename TValue>
 StackedBarGraph<TKey, TValue>::StackedBarGraph()
@@ -1639,6 +1745,7 @@ public:
 
     void draw(QPainter *painter, BaseAxis *xAxis, BaseAxis *yAxis,
               const QRectF &plotArea) override;
+    void drawLegendIcon(QPainter *painter, const QRectF &iconRect) const override;
 
     bool nearestPoint(BaseAxis *xAxis, BaseAxis *yAxis,
                       const QRectF &plotArea, const QPointF &pixel,
@@ -1653,6 +1760,15 @@ private:
 };
 
 // ---- RangeBarGraph implementations ----
+
+template<typename TKey, typename TValue>
+void RangeBarGraph<TKey, TValue>::drawLegendIcon(QPainter *painter,
+                                                  const QRectF &rect) const
+{
+    painter->fillRect(rect, m_barColor);
+    painter->setPen(QPen(m_borderColor, m_borderWidth));
+    painter->drawRect(rect);
+}
 
 template<typename TKey, typename TValue>
 RangeBarGraph<TKey, TValue>::RangeBarGraph()
@@ -1819,6 +1935,8 @@ public:
     void setSelected(bool sel);
     bool isSelected() const { return m_selected; }
 
+    void setHighlighted(bool hl) override { setSelected(hl); }
+
     void setLayer(int layer) override;
     void setName(const QString &name) override;
 
@@ -1833,6 +1951,7 @@ public:
     bool hitTest(BaseAxis *xAxis, BaseAxis *yAxis,
                  const QRectF &plotArea, const QPointF &pixel,
                  QVariant &key, QVariant &value) const override;
+    void drawLegendIcon(QPainter *painter, const QRectF &iconRect) const override;
 
 private:
     RangeBarGraph<TKey, TValue> *m_rangeBar = nullptr;
@@ -1853,6 +1972,22 @@ private:
     void rebuildInternal();
     void applyOpacityToGraph(GraphBase *g, const QColor &baseColor, int alpha);
 };
+
+template<typename TKey, typename TValue>
+void ComboGraph<TKey, TValue>::drawLegendIcon(QPainter *painter,
+                                               const QRectF &rect) const
+{
+    // Combo: small range bar + line marker in center
+    painter->fillRect(rect, m_color);
+    QPen p(m_color);
+    p.setWidth(2);
+    painter->setPen(p);
+    painter->drawLine(QPointF(rect.left(), rect.center().y()),
+                      QPointF(rect.right(), rect.center().y()));
+    QPointF c = rect.center();
+    painter->setBrush(m_color);
+    painter->drawEllipse(c, 2.5, 2.5);
+}
 
 template<typename TKey, typename TValue>
 ComboGraph<TKey, TValue>::ComboGraph()
